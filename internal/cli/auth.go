@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"time"
 
-	"openai-local-gateway/internal/config"
-	"openai-local-gateway/internal/oauth"
+	"codex-gateway/internal/config"
+	"codex-gateway/internal/oauth"
 )
 
 func AuthStatus(cfg *config.Config, out io.Writer) error {

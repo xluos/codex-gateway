@@ -1,4 +1,4 @@
-# OpenAI Local Gateway
+# Codex Gateway
 
 从 `sub2api` 的 OpenAI 网关思路里提炼出的本地最小版，只保留单用户自用场景需要的能力。
 
@@ -27,11 +27,11 @@
 1. 准备配置文件
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/openai-local-gateway
-cp config.example.yaml config.yaml
+mkdir -p ~/.codex-gateway
+cp /Users/bytedance/Documents/AIWorkspace/codex-gateway/config.example.yaml ~/.codex-gateway/config.yaml
 ```
 
-2. 修改 `config.yaml`
+2. 修改 `~/.codex-gateway/config.yaml`
 
 - `auth.api_keys`: 你本地客户端要使用的 key
 - `upstream.mode=api_key` 时，填写 `upstream.api_key`
@@ -40,9 +40,60 @@ cp config.example.yaml config.yaml
 3. 启动服务
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/openai-local-gateway
-go run ./cmd/server -config ./config.yaml
+cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
+go run ./cmd/server serve
 ```
+
+也保留了兼容旧用法：
+
+```bash
+go run ./cmd/server -config /path/to/config.yaml
+```
+
+## CLI 命令
+
+查看帮助：
+
+```bash
+cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
+go run ./cmd/server help
+```
+
+后台启动：
+
+```bash
+go run ./cmd/server start
+```
+
+查看状态：
+
+```bash
+go run ./cmd/server status
+```
+
+查看最近日志：
+
+```bash
+go run ./cmd/server logs -n 100
+```
+
+停止服务：
+
+```bash
+go run ./cmd/server stop
+```
+
+重启服务：
+
+```bash
+go run ./cmd/server restart
+```
+
+运行态文件默认会写到：
+
+- `~/.codex-gateway/codex-gateway.pid`
+- `~/.codex-gateway/codex-gateway.json`
+- `~/.codex-gateway/codex-gateway.log`
 
 ## OAuth 登录
 
@@ -56,26 +107,26 @@ upstream:
 然后执行：
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/openai-local-gateway
-go run ./cmd/server auth login -config ./config.yaml
+cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
+go run ./cmd/server auth login
 ```
 
 成功后，凭证会写到：
 
 ```text
-./credentials/openai-oauth.json
+~/.codex-gateway/openai-oauth.json
 ```
 
 查看当前凭证状态：
 
 ```bash
-go run ./cmd/server auth status -config ./config.yaml
+go run ./cmd/server auth status
 ```
 
 手动刷新凭证：
 
 ```bash
-go run ./cmd/server auth refresh -config ./config.yaml
+go run ./cmd/server auth refresh
 ```
 
 ## 日志排查
@@ -97,6 +148,8 @@ logging:
 
 开启后会额外记录归一化后的请求体，以及上游错误响应体片段。这个开关只建议本地自用时临时打开，因为它可能把你的 prompt 和请求参数打进日志。
 
+无论前台 `serve` 还是后台 `start`，日志都会写到 `runtime.log_file`。默认是 `~/.codex-gateway/codex-gateway.log`。前台模式会同时输出到终端，后台模式只落盘。
+
 4. 调用示例
 
 ```bash
@@ -114,15 +167,15 @@ curl http://127.0.0.1:8081/v1/chat/completions \
 ## 开发验证
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/openai-local-gateway
+cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
 go test ./...
 ```
 
 如果你已经完成 OAuth 登录，可以直接跑 smoke：
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/openai-local-gateway
-./scripts/smoke_oauth.sh ./config.yaml your-local-api-key
+cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
+./scripts/smoke_oauth.sh ~/.codex-gateway/config.yaml your-local-api-key
 ```
 
 脚本会自动启动一个临时服务实例，验证：

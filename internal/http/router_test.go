@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"openai-local-gateway/internal/config"
+	"codex-gateway/internal/config"
 )
 
 func testConfig() *config.Config {

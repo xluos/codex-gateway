@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -14,6 +16,7 @@ type Config struct {
 	Auth     AuthConfig     `yaml:"auth"`
 	Upstream UpstreamConfig `yaml:"upstream"`
 	OAuth    OAuthConfig    `yaml:"oauth"`
+	Runtime  RuntimeConfig  `yaml:"runtime"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Compat   CompatConfig   `yaml:"compat"`
 }
@@ -42,6 +45,13 @@ type OAuthConfig struct {
 	CallbackPath    string `yaml:"callback_path"`
 	CredentialsFile string `yaml:"credentials_file"`
 	AutoOpenBrowser bool   `yaml:"auto_open_browser"`
+}
+
+type RuntimeConfig struct {
+	Dir       string `yaml:"dir"`
+	PIDFile   string `yaml:"pid_file"`
+	LogFile   string `yaml:"log_file"`
+	StateFile string `yaml:"state_file"`
 }
 
 type LoggingConfig struct {
@@ -94,12 +104,30 @@ func applyDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.OAuth.CallbackPath) == "" {
 		cfg.OAuth.CallbackPath = "/auth/callback"
 	}
+	defaultHomeDir := defaultCodexGatewayDir()
 	if strings.TrimSpace(cfg.OAuth.CredentialsFile) == "" {
-		cfg.OAuth.CredentialsFile = "./credentials/openai-oauth.json"
+		cfg.OAuth.CredentialsFile = filepath.Join(defaultHomeDir, "openai-oauth.json")
 	}
 	if !cfg.OAuth.AutoOpenBrowser {
 		cfg.OAuth.AutoOpenBrowser = true
 	}
+	if strings.TrimSpace(cfg.Runtime.Dir) == "" {
+		cfg.Runtime.Dir = defaultHomeDir
+	}
+	cfg.Runtime.Dir = expandPath(cfg.Runtime.Dir)
+	if strings.TrimSpace(cfg.Runtime.PIDFile) == "" {
+		cfg.Runtime.PIDFile = filepath.Join(cfg.Runtime.Dir, "codex-gateway.pid")
+	}
+	if strings.TrimSpace(cfg.Runtime.LogFile) == "" {
+		cfg.Runtime.LogFile = filepath.Join(cfg.Runtime.Dir, "codex-gateway.log")
+	}
+	if strings.TrimSpace(cfg.Runtime.StateFile) == "" {
+		cfg.Runtime.StateFile = filepath.Join(cfg.Runtime.Dir, "codex-gateway.json")
+	}
+	cfg.OAuth.CredentialsFile = expandPath(cfg.OAuth.CredentialsFile)
+	cfg.Runtime.PIDFile = expandPath(cfg.Runtime.PIDFile)
+	cfg.Runtime.LogFile = expandPath(cfg.Runtime.LogFile)
+	cfg.Runtime.StateFile = expandPath(cfg.Runtime.StateFile)
 }
 
 func validateConfig(cfg *Config) error {
@@ -141,4 +169,29 @@ func normalizeOAuthCallbackHost(host string) string {
 	default:
 		return strings.TrimSpace(host)
 	}
+}
+
+func defaultCodexGatewayDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		home = "."
+	}
+	return filepath.Join(home, ".codex-gateway")
+}
+
+func expandPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return trimmed
+	}
+	if trimmed == "~" {
+		return defaultCodexGatewayDir()
+	}
+	if strings.HasPrefix(trimmed, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil && strings.TrimSpace(home) != "" {
+			return filepath.Join(home, trimmed[2:])
+		}
+	}
+	return trimmed
 }

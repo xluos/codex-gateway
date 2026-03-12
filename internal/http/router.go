@@ -3,8 +3,8 @@ package httpserver
 import (
 	"net/http"
 
-	"openai-local-gateway/internal/config"
-	"openai-local-gateway/internal/http/middleware"
+	"codex-gateway/internal/config"
+	"codex-gateway/internal/http/middleware"
 )
 
 type OpenAIHandler interface {

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"openai-local-gateway/internal/openai"
-	"openai-local-gateway/internal/oauth"
-	"openai-local-gateway/internal/upstream"
+	"codex-gateway/internal/openai"
+	"codex-gateway/internal/oauth"
+	"codex-gateway/internal/upstream"
 )
 
 type Logger interface {
@@ -447,7 +447,7 @@ func (h *OpenAIHandler) doOAuthCodexRequest(r *http.Request, body []byte) (*http
 
 func (h *OpenAIHandler) logRequest(fields requestLogFields) {
 	parts := []string{
-		"openai-local-gateway",
+		"codex-gateway",
 		fmt.Sprintf("method=%s", fields.method),
 		fmt.Sprintf("path=%s", fields.path),
 		fmt.Sprintf("mode=%s", firstNonEmpty(fields.mode, "unknown")),

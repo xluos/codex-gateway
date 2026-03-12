@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"openai-local-gateway/internal/oauth"
-	"openai-local-gateway/internal/upstream"
+	"codex-gateway/internal/oauth"
+	"codex-gateway/internal/upstream"
 )
 
 func newTestHandler(t *testing.T, upstreamServer *httptest.Server) *OpenAIHandler {

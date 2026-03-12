@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"openai-local-gateway/internal/http/handler"
-	"openai-local-gateway/internal/upstream"
+	"codex-gateway/internal/http/handler"
+	"codex-gateway/internal/upstream"
 )
 
 func TestEndToEnd_ModelsChatResponses(t *testing.T) {

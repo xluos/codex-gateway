@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"openai-local-gateway/internal/config"
-	"openai-local-gateway/internal/oauth"
+	"codex-gateway/internal/config"
+	"codex-gateway/internal/oauth"
 )
 
 func TestAuthStatus_PrintsCredentialSummary(t *testing.T) {

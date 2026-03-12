@@ -1,4 +1,4 @@
-module openai-local-gateway
+module codex-gateway
 
 go 1.23.4
 

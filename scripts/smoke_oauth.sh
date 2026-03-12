@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG_PATH="${1:-$ROOT_DIR/config.yaml}"
+DEFAULT_CONFIG_PATH="${HOME:-$ROOT_DIR}/.codex-gateway/config.yaml"
+CONFIG_PATH="${1:-$DEFAULT_CONFIG_PATH}"
 LOCAL_API_KEY="${2:-${LOCAL_API_KEY:-}}"
 BASE_URL="${3:-${BASE_URL:-http://127.0.0.1:9867}}"
-LOG_FILE="${LOG_FILE:-$(mktemp -t openai-local-gateway-smoke.XXXXXX.log)}"
+LOG_FILE="${LOG_FILE:-$(mktemp -t codex-gateway-smoke.XXXXXX.log)}"
 
 if [[ -z "$LOCAL_API_KEY" ]]; then
   echo "missing local api key: pass it as the second argument or LOCAL_API_KEY env" >&2
@@ -45,7 +46,7 @@ if ! curl --silent --show-error "$BASE_URL/healthz" >/dev/null 2>&1; then
 fi
 
 echo "[smoke] GET $BASE_URL/v1/models"
-models_body="$(mktemp -t openai-local-gateway-models.XXXXXX.json)"
+models_body="$(mktemp -t codex-gateway-models.XXXXXX.json)"
 models_status="$(curl --silent --show-error --output "$models_body" --write-out '%{http_code}' \
   "$BASE_URL/v1/models" \
   -H "Authorization: Bearer $LOCAL_API_KEY")"
@@ -59,7 +60,7 @@ if [[ "$models_status" != "200" ]]; then
 fi
 
 echo "[smoke] POST $BASE_URL/v1/responses"
-responses_body="$(mktemp -t openai-local-gateway-responses.XXXXXX.txt)"
+responses_body="$(mktemp -t codex-gateway-responses.XXXXXX.txt)"
 responses_status="$(curl --silent --show-error --no-buffer --max-time 90 --output "$responses_body" --write-out '%{http_code}' \
   "$BASE_URL/v1/responses" \
   -H "Authorization: Bearer $LOCAL_API_KEY" \
@@ -81,7 +82,7 @@ if ! grep -q '^data:' "$responses_body"; then
 fi
 
 echo "[smoke] POST $BASE_URL/v1/chat/completions"
-chat_body="$(mktemp -t openai-local-gateway-chat.XXXXXX.json)"
+chat_body="$(mktemp -t codex-gateway-chat.XXXXXX.json)"
 chat_status="$(curl --silent --show-error --max-time 90 --output "$chat_body" --write-out '%{http_code}' \
   "$BASE_URL/v1/chat/completions" \
   -H "Authorization: Bearer $LOCAL_API_KEY" \

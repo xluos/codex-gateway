@@ -18,8 +18,14 @@ oauth:
   callback_host: localhost
   callback_port: 1455
   callback_path: /auth/callback
-  credentials_file: ./credentials/openai-oauth.json
+  credentials_file: ~/.codex-gateway/openai-oauth.json
   auto_open_browser: true
+
+runtime:
+  dir: ~/.codex-gateway
+  pid_file: ~/.codex-gateway/codex-gateway.pid
+  log_file: ~/.codex-gateway/codex-gateway.log
+  state_file: ~/.codex-gateway/codex-gateway.json
 
 logging:
   level: info
