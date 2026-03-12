@@ -1,0 +1,29 @@
+server:
+  host: 127.0.0.1
+  port: 9867
+  read_timeout_seconds: 60
+  write_timeout_seconds: 600
+
+auth:
+  api_keys:
+    - local-dev-key
+
+upstream:
+  mode: api_key
+  base_url: https://api.openai.com
+  api_key: sk-your-openai-key
+  timeout_seconds: 600
+
+oauth:
+  callback_host: localhost
+  callback_port: 1455
+  callback_path: /auth/callback
+  credentials_file: ./credentials/openai-oauth.json
+  auto_open_browser: true
+
+logging:
+  level: info
+  debug_dump_http: false
+
+compat:
+  enable_alias_routes: true

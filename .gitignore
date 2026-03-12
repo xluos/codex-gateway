@@ -1,0 +1,7 @@
+config.yaml
+credentials/
+*.log
+*.out
+dist/
+bin/
+.DS_Store
