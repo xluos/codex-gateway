@@ -24,6 +24,42 @@
 
 ## 使用方式
 
+## 安装
+
+本地编译并安装二进制：
+
+```bash
+cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
+./scripts/install.sh
+```
+
+安装脚本会做这些事：
+
+- 编译二进制到 `~/.codex-gateway/bin/codexgateway`
+- 创建缩写命令 `~/.codex-gateway/bin/cgw`
+- 如果 `~/.codex-gateway/config.yaml` 不存在，就自动用示例配置创建
+- 把 `~/.codex-gateway/bin` 写进你的 shell rc 文件，默认是 `~/.zshrc`
+
+安装完成后执行：
+
+```bash
+source ~/.zshrc
+codexgateway help
+cgw help
+```
+
+如果你以后想移除命令入口，可以执行：
+
+```bash
+cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
+./scripts/uninstall.sh
+```
+
+注意：
+
+- 安装脚本只能修改 shell 配置文件，不能直接改掉“当前已经打开的 shell 进程”的环境变量，所以安装后需要 `source` 一次。
+- 安装脚本不会删除你的 `~/.codex-gateway/config.yaml`、日志和 OAuth 凭证，卸载时只会移除二进制和 PATH 配置块。
+
 1. 准备配置文件
 
 ```bash
@@ -40,8 +76,7 @@ cp /Users/bytedance/Documents/AIWorkspace/codex-gateway/config.example.yaml ~/.c
 3. 启动服务
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
-go run ./cmd/server serve
+codexgateway serve
 ```
 
 也保留了兼容旧用法：
@@ -55,38 +90,37 @@ go run ./cmd/server -config /path/to/config.yaml
 查看帮助：
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
-go run ./cmd/server help
+codexgateway help
 ```
 
 后台启动：
 
 ```bash
-go run ./cmd/server start
+codexgateway start
 ```
 
 查看状态：
 
 ```bash
-go run ./cmd/server status
+codexgateway status
 ```
 
 查看最近日志：
 
 ```bash
-go run ./cmd/server logs -n 100
+codexgateway logs -n 100
 ```
 
 停止服务：
 
 ```bash
-go run ./cmd/server stop
+codexgateway stop
 ```
 
 重启服务：
 
 ```bash
-go run ./cmd/server restart
+codexgateway restart
 ```
 
 运行态文件默认会写到：
@@ -107,8 +141,7 @@ upstream:
 然后执行：
 
 ```bash
-cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
-go run ./cmd/server auth login
+codexgateway auth login
 ```
 
 成功后，凭证会写到：
@@ -120,13 +153,13 @@ go run ./cmd/server auth login
 查看当前凭证状态：
 
 ```bash
-go run ./cmd/server auth status
+codexgateway auth status
 ```
 
 手动刷新凭证：
 
 ```bash
-go run ./cmd/server auth refresh
+codexgateway auth refresh
 ```
 
 ## 日志排查
