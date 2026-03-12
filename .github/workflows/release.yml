@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            asset_name: codexgateway_darwin_amd64.tar.gz
+          - goos: darwin
+            goarch: arm64
+            asset_name: codexgateway_darwin_arm64.tar.gz
+          - goos: linux
+            goarch: amd64
+            asset_name: codexgateway_linux_amd64.tar.gz
+          - goos: linux
+            goarch: arm64
+            asset_name: codexgateway_linux_arm64.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          ASSET_NAME: ${{ matrix.asset_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/${ASSET_NAME%.tar.gz}"
+          go build -buildvcs=false -o "dist/${ASSET_NAME%.tar.gz}/codexgateway" ./cmd/server
+          tar -czf "dist/${ASSET_NAME}" -C "dist/${ASSET_NAME%.tar.gz}" codexgateway
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find dist -type f -name '*.tar.gz' -exec mv {} release/ \;
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum *.tar.gz > checksums.txt
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.tar.gz
+            release/checksums.txt

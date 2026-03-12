@@ -45,31 +45,52 @@ Codex Gateway 适合以下场景：
 
 ## 快速开始
 
-### 1. 安装
+### 1. 本地构建
 
 在项目根目录执行：
 
 ```bash
-./scripts/install.sh
+./scripts/build.sh
 ```
 
-安装脚本会：
+本地构建脚本会：
 
 - 编译二进制到 `~/.codex-gateway/bin/codexgateway`
 - 创建缩写命令 `~/.codex-gateway/bin/cgw`
-- 在当前 shell 对应的 rc 文件中追加 PATH 配置
 - 检查二进制是否可正常执行
 
-安装完成后加载 shell 配置并初始化：
+如果 `~/.codex-gateway/bin` 已经在你的 `PATH` 里，构建完成后即可直接初始化：
 
 ```bash
-source ~/.zshrc
 codexgateway init
 ```
 
-如果你使用的不是 `zsh`，请按实际 shell 加载对应 rc 文件。
+仓库根目录的 `./install.sh` 用于 GitHub Releases 远程安装，不用于本地开发构建。
 
-### 2. 初始化配置
+### 2. 远程安装
+
+终端用户可以直接执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bytedance/codex-gateway/main/install.sh | bash
+```
+
+如需安装指定版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bytedance/codex-gateway/main/install.sh | VERSION=v0.1.0 bash
+```
+
+当前远程安装支持：
+
+- macOS amd64
+- macOS arm64
+- Linux amd64
+- Linux arm64
+
+暂不支持 Windows。
+
+### 3. 初始化配置
 
 首次使用建议执行：
 
@@ -95,7 +116,7 @@ codexgateway init -config /path/to/config.yaml
 codexgateway doctor
 ```
 
-### 3. 启动服务
+### 4. 启动服务
 
 前台运行：
 
@@ -117,7 +138,7 @@ go run ./cmd/server -config ~/.codex-gateway/config.yaml
 
 默认配置下，服务监听在 `http://127.0.0.1:9867`。
 
-### 4. 调用示例
+### 5. 调用示例
 
 查询模型：
 
@@ -186,7 +207,7 @@ codexgateway auth status
 codexgateway auth refresh
 ```
 
-安装脚本同时提供缩写命令 `cgw`，例如：
+本地构建后同时提供缩写命令 `cgw`，例如：
 
 ```bash
 cgw start
@@ -282,7 +303,7 @@ go test ./...
 
 - `~/.codex-gateway/bin/codexgateway`
 - `~/.codex-gateway/bin/cgw`
-- shell rc 文件中的 PATH 配置块
+- shell rc 文件中的历史 PATH 配置块（如果之前旧版安装脚本写入过）
 
 它不会删除你的配置文件、日志文件或 OAuth 凭证。若需要彻底清理，可手动删除 `~/.codex-gateway`。
 
@@ -320,4 +341,4 @@ go test ./...
 
 Codex Gateway is a lightweight local OpenAI-compatible gateway designed for single-user usage. It exposes `/v1/models`, `/v1/chat/completions`, and `/v1/responses`, supports both upstream `api_key` and `oauth` authentication modes, and provides local process management commands such as `start`, `stop`, `status`, `logs`, and `doctor`.
 
-This project is intentionally scoped for personal or local tooling scenarios. It does not aim to provide multi-tenant routing, billing, quota management, account pools, or an admin console. For setup, run `./scripts/install.sh`, initialize the config with `codexgateway init`, then start the gateway with `codexgateway serve` or `codexgateway start`.
+This project is intentionally scoped for personal or local tooling scenarios. It does not aim to provide multi-tenant routing, billing, quota management, account pools, or an admin console. For local development, run `./scripts/build.sh`. For end-user installation, run `curl -fsSL https://raw.githubusercontent.com/bytedance/codex-gateway/main/install.sh | bash` or pin a tag with `VERSION=vX.Y.Z`. Then initialize the config with `codexgateway init` and start the gateway with `codexgateway serve` or `codexgateway start`.

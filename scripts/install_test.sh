@@ -9,17 +9,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-assert_contains_once() {
-  local file="$1"
-  local pattern="$2"
-  local count
-  count="$(grep -F -c "$pattern" "$file" || true)"
-  if [[ "$count" != "1" ]]; then
-    printf '[test] expected %s to contain %q exactly once, got %s\n' "$file" "$pattern" "$count" >&2
-    exit 1
-  fi
-}
-
 run_case() {
   local shell_name="$1"
   local fake_home="$TMP_DIR/$shell_name-home"
@@ -41,24 +30,22 @@ run_case() {
   esac
 
   HOME="$fake_home" SHELL="/bin/$shell_name" CODEX_GATEWAY_HOME="$install_root" GOCACHE="$go_cache" GOMODCACHE="$go_mod_cache" \
-    "$ROOT_DIR/scripts/install.sh"
+    "$ROOT_DIR/scripts/build.sh"
   HOME="$fake_home" SHELL="/bin/$shell_name" CODEX_GATEWAY_HOME="$install_root" GOCACHE="$go_cache" GOMODCACHE="$go_mod_cache" \
-    "$ROOT_DIR/scripts/install.sh"
+    "$ROOT_DIR/scripts/build.sh"
 
-  [[ -f "$rc_file" ]] || { printf '[test] missing rc file %s\n' "$rc_file" >&2; exit 1; }
+  [[ -x "$install_root/bin/codexgateway" ]] || { printf '[test] missing binary %s\n' "$install_root/bin/codexgateway" >&2; exit 1; }
+  [[ -L "$install_root/bin/cgw" ]] || { printf '[test] missing shortcut symlink %s\n' "$install_root/bin/cgw" >&2; exit 1; }
+  [[ ! -e "$rc_file" ]] || { printf '[test] rc file should not be created: %s\n' "$rc_file" >&2; exit 1; }
 
-  assert_contains_once "$rc_file" "# >>> codex-gateway completion >>>"
-  assert_contains_once "$rc_file" "# <<< codex-gateway completion <<<"
-
-  case "$shell_name" in
-    zsh) [[ -f "$install_root/completions/_codexgateway" ]] || { printf '[test] missing zsh completion\n' >&2; exit 1; } ;;
-    bash) [[ -f "$install_root/completions/codexgateway.bash" ]] || { printf '[test] missing bash completion\n' >&2; exit 1; } ;;
-    fish) [[ -f "$install_root/completions/codexgateway.fish" ]] || { printf '[test] missing fish completion\n' >&2; exit 1; } ;;
-  esac
+  [[ "$(readlink "$install_root/bin/cgw")" == "$install_root/bin/codexgateway" ]] || {
+    printf '[test] shortcut symlink target is incorrect for %s\n' "$shell_name" >&2
+    exit 1
+  }
 }
 
 run_case zsh
 run_case bash
 run_case fish
 
-printf '[test] install completion checks passed\n'
+printf '[test] local build checks passed\n'
