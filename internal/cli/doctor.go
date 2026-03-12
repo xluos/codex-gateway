@@ -15,7 +15,7 @@ import (
 )
 
 func Doctor(configPath string, out io.Writer) error {
-	ui.PrintLines(out, ui.Banner(), ui.Section("环境诊断"))
+	ui.PrintLines(out, ui.Banner(out), ui.Section("环境诊断"))
 
 	resolvedConfigPath, err := resolvePath(configPath)
 	if err != nil {

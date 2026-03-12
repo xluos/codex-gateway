@@ -1,11 +1,14 @@
 package ui
 
 import (
+	_ "embed"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 )
 
 var (
@@ -17,14 +20,36 @@ var (
 	labelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
 )
 
-func Banner() string {
-	return titleStyle.Render(strings.TrimSpace(`
-   ____          __           
-  / ___|___   __/ /___ _ __ __
- | |   / _ \ / _  / _ \ \ / /
- | |__| (_) | (_| |  __/>  < 
-  \____\___/ \__,_|\___/_/\_\
-`)) + "\n" + titleStyle.Render("Codex Gateway") + "\n" + subtleStyle.Render("OpenAI OAuth local gateway")
+//go:embed banner_plain.txt
+var bannerPlain string
+
+//go:embed banner_ansi.txt
+var bannerANSI string
+
+func Banner(w io.Writer) string {
+	return bannerForWriter(w, os.Getenv, isTTYWriter)
+}
+
+func bannerForWriter(w io.Writer, getenv func(string) string, ttyDetector func(io.Writer) bool) string {
+	if shouldUseANSIBanner(w, getenv, ttyDetector) {
+		return bannerANSI + "\n" + titleStyle.Render("Codex Gateway") + "\n" + subtleStyle.Render("OpenAI OAuth local gateway")
+	}
+	return bannerPlain + "\nCodex Gateway\nOpenAI OAuth local gateway"
+}
+
+func shouldUseANSIBanner(w io.Writer, getenv func(string) string, ttyDetector func(io.Writer) bool) bool {
+	if getenv("NO_COLOR") != "" {
+		return false
+	}
+	return ttyDetector(w)
+}
+
+func isTTYWriter(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(file.Fd()))
 }
 
 func Section(title string) string {

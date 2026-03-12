@@ -287,7 +287,7 @@ func isInteractiveTerminal(in io.Reader, out io.Writer) bool {
 }
 
 func initWithSurvey(configPath, configDir, defaultLocalAPIKey string, out io.Writer) error {
-	ui.PrintLines(out, ui.Banner(), ui.Section("初始化向导"), ui.KV("配置目录", configDir))
+	ui.PrintLines(out, ui.Banner(out), ui.Section("初始化向导"), ui.KV("配置目录", configDir))
 
 	answers := struct {
 		LocalAPIKey string

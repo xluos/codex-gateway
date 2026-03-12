@@ -20,7 +20,7 @@ func AuthStatus(cfg *config.Config, out io.Writer) error {
 		return err
 	}
 	ui.PrintLines(out,
-		ui.Banner(),
+		ui.Banner(out),
 		ui.Section("OAuth 凭证"),
 		ui.KV("邮箱", cred.Email),
 		ui.KV("套餐", cred.PlanType),
@@ -66,7 +66,7 @@ func AuthLogin(ctx context.Context, cfg *config.Config, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	ui.PrintLines(out, ui.Banner(), ui.Section("OAuth 登录"), ui.KV("授权链接", session.AuthURL))
+	ui.PrintLines(out, ui.Banner(out), ui.Section("OAuth 登录"), ui.KV("授权链接", session.AuthURL))
 
 	if cfg.OAuth.AutoOpenBrowser {
 		if err := openBrowser(session.AuthURL); err != nil {

@@ -3,6 +3,8 @@ credentials/
 runtime/
 *.log
 *.out
+*.pid
+*.seed
 dist/
 bin/
 .DS_Store

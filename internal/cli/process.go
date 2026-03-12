@@ -38,7 +38,7 @@ type State struct {
 
 func writeUsage(w io.Writer) {
 	ui.PrintLines(w,
-		ui.Banner(),
+		ui.Banner(w),
 		ui.Section("常用命令"),
 		"  codexgateway init    -config ~/.codex-gateway/config.yaml [-force]",
 		"  codexgateway serve   -config ~/.codex-gateway/config.yaml",
