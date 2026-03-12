@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -20,7 +19,15 @@ import (
 	"codex-gateway/internal/http/handler"
 	"codex-gateway/internal/oauth"
 	"codex-gateway/internal/upstream"
+
+	"github.com/spf13/cobra"
 )
+
+type appContext struct {
+	stdin      io.Reader
+	stdout     io.Writer
+	configPath string
+}
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -29,171 +36,205 @@ func main() {
 }
 
 func run(args []string, stdout io.Writer) error {
-	command, commandArgs := parseCommand(args)
-	switch command {
-	case "help":
-		return cli.Help(stdout)
-	case "init":
-		return runInit(commandArgs, stdout)
-	case "auth":
-		return runAuth(commandArgs)
-	case "start":
-		return runStart(commandArgs, stdout)
-	case "stop":
-		return runStop(commandArgs, stdout)
-	case "restart":
-		return runRestart(commandArgs, stdout)
-	case "status":
-		return runStatus(commandArgs, stdout)
-	case "logs":
-		return runLogs(commandArgs, stdout)
-	case "serve":
-		return runServe(commandArgs)
-	default:
-		return fmt.Errorf("unknown command: %s", command)
+	ctx := &appContext{
+		stdin:  os.Stdin,
+		stdout: stdout,
+	}
+	cmd := newRootCommand(ctx)
+	cmd.SetOut(stdout)
+	cmd.SetErr(stdout)
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func newRootCommand(app *appContext) *cobra.Command {
+	root := &cobra.Command{
+		Use:           "codexgateway",
+		Short:         "Local OpenAI OAuth gateway",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return serve(app.configPath, cfg)
+		},
+	}
+	root.PersistentFlags().StringVar(&app.configPath, "config", defaultConfigPath(), "path to config file")
+	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		_ = cli.Help(app.stdout)
+	})
+
+	root.AddCommand(
+		newInitCommand(app),
+		newServeCommand(app),
+		newStartCommand(app),
+		newStopCommand(app),
+		newRestartCommand(app),
+		newDoctorCommand(app),
+		newStatusCommand(app),
+		newLogsCommand(app),
+		newAuthCommand(app),
+	)
+	return root
+}
+
+func newInitCommand(app *appContext) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize config interactively",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.Init(app.configPath, force, app.stdin, app.stdout)
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing config")
+	return cmd
+}
+
+func newServeCommand(app *appContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "serve",
+		Short: "Run gateway in foreground",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return serve(app.configPath, cfg)
+		},
 	}
 }
 
-func parseCommand(args []string) (string, []string) {
-	if len(args) == 0 {
-		return "serve", nil
-	}
-	first := args[0]
-	switch first {
-	case "help", "-h", "--help":
-		return "help", args[1:]
-	case "auth", "init", "serve", "start", "stop", "restart", "status", "logs":
-		return first, args[1:]
-	default:
-		if strings.HasPrefix(first, "-") {
-			return "serve", args
-		}
-		return first, args[1:]
+func newStartCommand(app *appContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "start",
+		Short: "Start gateway in background",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return cli.Start(context.Background(), app.configPath, cfg, app.stdout)
+		},
 	}
 }
 
-func runAuth(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("missing auth subcommand")
-	}
-	authFlags := flag.NewFlagSet("auth", flag.ContinueOnError)
-	authFlags.SetOutput(io.Discard)
-	configPath := authFlags.String("config", defaultConfigPath(), "path to config file")
-	if err := authFlags.Parse(args[1:]); err != nil {
-		return fmt.Errorf("parse auth flags: %w", err)
-	}
-	cfg, err := loadConfigFromFile(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	switch args[0] {
-	case "login":
-		return cli.AuthLogin(ctx, cfg, os.Stdout)
-	case "status":
-		return cli.AuthStatus(cfg, os.Stdout)
-	case "refresh":
-		return cli.AuthRefresh(ctx, cfg, os.Stdout)
-	default:
-		return fmt.Errorf("unknown auth command: %s", args[0])
+func newStopCommand(app *appContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop background gateway",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return cli.Stop(cfg, app.stdout)
+		},
 	}
 }
 
-func runInit(args []string, stdout io.Writer) error {
-	initFlags := flag.NewFlagSet("init", flag.ContinueOnError)
-	initFlags.SetOutput(io.Discard)
-	configPath := initFlags.String("config", defaultConfigPath(), "path to config file")
-	force := initFlags.Bool("force", false, "overwrite existing config")
-	if err := initFlags.Parse(args); err != nil {
-		return fmt.Errorf("parse init flags: %w", err)
+func newRestartCommand(app *appContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart",
+		Short: "Restart background gateway",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return cli.Restart(context.Background(), app.configPath, cfg, app.stdout)
+		},
 	}
-	return cli.Init(*configPath, *force, os.Stdin, stdout)
 }
 
-func runServe(args []string) error {
-	serveFlags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	serveFlags.SetOutput(io.Discard)
-	configPath := serveFlags.String("config", defaultConfigPath(), "path to config file")
-	if err := serveFlags.Parse(args); err != nil {
-		return fmt.Errorf("parse serve flags: %w", err)
+func newStatusCommand(app *appContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show gateway status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return cli.Status(cfg, app.stdout)
+		},
 	}
-	cfg, err := loadConfigFromFile(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	return serve(*configPath, cfg)
 }
 
-func runStart(args []string, stdout io.Writer) error {
-	startFlags := flag.NewFlagSet("start", flag.ContinueOnError)
-	startFlags.SetOutput(io.Discard)
-	configPath := startFlags.String("config", defaultConfigPath(), "path to config file")
-	if err := startFlags.Parse(args); err != nil {
-		return fmt.Errorf("parse start flags: %w", err)
+func newDoctorCommand(app *appContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "doctor",
+		Short: "Diagnose local gateway environment",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cli.Doctor(app.configPath, app.stdout)
+		},
 	}
-	cfg, err := loadConfigFromFile(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	return cli.Start(context.Background(), *configPath, cfg, stdout)
 }
 
-func runStop(args []string, stdout io.Writer) error {
-	stopFlags := flag.NewFlagSet("stop", flag.ContinueOnError)
-	stopFlags.SetOutput(io.Discard)
-	configPath := stopFlags.String("config", defaultConfigPath(), "path to config file")
-	if err := stopFlags.Parse(args); err != nil {
-		return fmt.Errorf("parse stop flags: %w", err)
+func newLogsCommand(app *appContext) *cobra.Command {
+	var lines int
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "Show recent logs",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			return cli.Logs(cfg, app.stdout, lines)
+		},
 	}
-	cfg, err := loadConfigFromFile(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	return cli.Stop(cfg, stdout)
+	cmd.Flags().IntVarP(&lines, "lines", "n", 100, "number of log lines")
+	return cmd
 }
 
-func runRestart(args []string, stdout io.Writer) error {
-	restartFlags := flag.NewFlagSet("restart", flag.ContinueOnError)
-	restartFlags.SetOutput(io.Discard)
-	configPath := restartFlags.String("config", defaultConfigPath(), "path to config file")
-	if err := restartFlags.Parse(args); err != nil {
-		return fmt.Errorf("parse restart flags: %w", err)
+func newAuthCommand(app *appContext) *cobra.Command {
+	auth := &cobra.Command{
+		Use:   "auth",
+		Short: "Manage OpenAI OAuth credentials",
 	}
-	cfg, err := loadConfigFromFile(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	return cli.Restart(context.Background(), *configPath, cfg, stdout)
-}
-
-func runStatus(args []string, stdout io.Writer) error {
-	statusFlags := flag.NewFlagSet("status", flag.ContinueOnError)
-	statusFlags.SetOutput(io.Discard)
-	configPath := statusFlags.String("config", defaultConfigPath(), "path to config file")
-	if err := statusFlags.Parse(args); err != nil {
-		return fmt.Errorf("parse status flags: %w", err)
-	}
-	cfg, err := loadConfigFromFile(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	return cli.Status(cfg, stdout)
-}
-
-func runLogs(args []string, stdout io.Writer) error {
-	logsFlags := flag.NewFlagSet("logs", flag.ContinueOnError)
-	logsFlags.SetOutput(io.Discard)
-	configPath := logsFlags.String("config", defaultConfigPath(), "path to config file")
-	lines := logsFlags.Int("n", 100, "number of log lines")
-	if err := logsFlags.Parse(args); err != nil {
-		return fmt.Errorf("parse logs flags: %w", err)
-	}
-	cfg, err := loadConfigFromFile(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	return cli.Logs(cfg, stdout, *lines)
+	auth.AddCommand(
+		&cobra.Command{
+			Use:   "login",
+			Short: "Run OAuth login flow",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				cfg, err := loadConfigFromFile(app.configPath)
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				return cli.AuthLogin(ctx, cfg, app.stdout)
+			},
+		},
+		&cobra.Command{
+			Use:   "status",
+			Short: "Show OAuth credential status",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				cfg, err := loadConfigFromFile(app.configPath)
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				return cli.AuthStatus(cfg, app.stdout)
+			},
+		},
+		&cobra.Command{
+			Use:   "refresh",
+			Short: "Refresh OAuth credential",
+			RunE: func(cmd *cobra.Command, args []string) error {
+				cfg, err := loadConfigFromFile(app.configPath)
+				if err != nil {
+					return fmt.Errorf("load config: %w", err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				return cli.AuthRefresh(ctx, cfg, app.stdout)
+			},
+		},
+	)
+	return auth
 }
 
 func serve(configPath string, cfg *config.Config) error {

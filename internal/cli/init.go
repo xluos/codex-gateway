@@ -12,6 +12,10 @@ import (
 	"strings"
 
 	"codex-gateway/internal/config"
+	"codex-gateway/internal/ui"
+
+	"github.com/AlecAivazis/survey/v2"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,6 +50,9 @@ func Init(configPath string, force bool, in io.Reader, out io.Writer) error {
 	}
 
 	_, _ = fmt.Fprintf(out, "正在初始化 codex-gateway，配置目录：%s\n\n", configDir)
+	if isInteractiveTerminal(in, out) {
+		return initWithSurvey(resolvedConfigPath, configDir, defaultLocalAPIKey, out)
+	}
 
 	localAPIKey, err := promptWithDefault(reader, out, "本地网关 API Key（直接回车使用默认值）", defaultLocalAPIKey)
 	if err != nil {
@@ -210,35 +217,31 @@ func confirmWrite(reader *bufio.Reader, out io.Writer, configPath string, cfg *c
 }
 
 func printInitNextSteps(out io.Writer, configPath string, cfg *config.Config) {
-	_, _ = fmt.Fprintf(out, "\n配置已写入：%s\n", configPath)
-	_, _ = fmt.Fprintf(out, "运行时文件目录：%s\n", cfg.Runtime.Dir)
+	ui.PrintLines(out, "", ui.Success("配置已写入"), ui.KV("配置文件", configPath), ui.KV("运行时目录", cfg.Runtime.Dir))
 	if len(cfg.Auth.APIKeys) > 0 {
-		_, _ = fmt.Fprintf(out, "本地网关 API Key：%s\n", cfg.Auth.APIKeys[0])
-		_, _ = io.WriteString(out, "请把这个 Key 配到你的客户端里，后续请求网关时使用。\n")
+		ui.PrintLines(out, ui.KV("本地网关 API Key", cfg.Auth.APIKeys[0]), ui.Muted("请把这个 Key 配到你的客户端里，后续请求网关时使用。"))
 	}
-	_, _ = io.WriteString(out, "\n接下来可以这样使用：\n")
+	ui.PrintLines(out, ui.Section("接下来可以这样使用"))
 	if cfg.Upstream.Mode == "oauth" {
-		_, _ = io.WriteString(out, "  1. codexgateway auth login\n")
-		_, _ = io.WriteString(out, "  2. codexgateway start\n")
-		_, _ = io.WriteString(out, "  3. codexgateway status\n")
-		_, _ = io.WriteString(out, "  4. codexgateway logs -n 100\n")
+		ui.PrintLines(out, "  1. codexgateway auth login", "  2. codexgateway start", "  3. codexgateway status", "  4. codexgateway logs -n 100")
 		return
 	}
-	_, _ = io.WriteString(out, "  1. codexgateway serve\n")
-	_, _ = io.WriteString(out, "  2. codexgateway start\n")
-	_, _ = io.WriteString(out, "  3. codexgateway status\n")
-	_, _ = io.WriteString(out, "  4. codexgateway logs -n 100\n")
+	ui.PrintLines(out, "  1. codexgateway serve", "  2. codexgateway start", "  3. codexgateway status", "  4. codexgateway logs -n 100")
 }
 
 func printExistingConfigMessage(out io.Writer, configPath string) {
-	_, _ = fmt.Fprintf(out, "已检测到现有配置文件：%s\n", configPath)
-	_, _ = io.WriteString(out, "当前无需重新初始化。\n\n")
-	_, _ = io.WriteString(out, "你可以直接使用：\n")
-	_, _ = io.WriteString(out, "  codexgateway start\n")
-	_, _ = io.WriteString(out, "  codexgateway status\n")
-	_, _ = io.WriteString(out, "  codexgateway logs -n 100\n\n")
-	_, _ = io.WriteString(out, "如果你确认要覆盖现有配置，请执行：\n")
-	_, _ = io.WriteString(out, "  codexgateway init -force\n")
+	ui.PrintLines(out,
+		ui.Warn("已检测到现有配置文件"),
+		ui.KV("配置文件", configPath),
+		ui.Muted("当前无需重新初始化。"),
+		ui.Section("你可以直接使用"),
+		"  codexgateway start",
+		"  codexgateway status",
+		"  codexgateway logs -n 100",
+		"",
+		ui.Section("如果你确认要覆盖现有配置"),
+		"  codexgateway init --force",
+	)
 }
 
 func resolvePath(path string) (string, error) {
@@ -269,4 +272,78 @@ func generateLocalAPIKey() (string, error) {
 		return "", err
 	}
 	return "cgw-" + hex.EncodeToString(buf), nil
+}
+
+func isInteractiveTerminal(in io.Reader, out io.Writer) bool {
+	inFile, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	outFile, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(inFile.Fd())) && term.IsTerminal(int(outFile.Fd()))
+}
+
+func initWithSurvey(configPath, configDir, defaultLocalAPIKey string, out io.Writer) error {
+	ui.PrintLines(out, ui.Banner(), ui.Section("初始化向导"), ui.KV("配置目录", configDir))
+
+	answers := struct {
+		LocalAPIKey string
+		Mode        string
+		UpstreamKey string
+		Confirm     bool
+	}{
+		LocalAPIKey: defaultLocalAPIKey,
+		Mode:        "oauth",
+	}
+
+	questions := []*survey.Question{
+		{
+			Name: "LocalAPIKey",
+			Prompt: &survey.Input{
+				Message: "本地网关 API Key（回车接受默认值）",
+				Default: defaultLocalAPIKey,
+			},
+			Validate: survey.Required,
+		},
+		{
+			Name: "Mode",
+			Prompt: &survey.Select{
+				Message: "请选择上游认证方式",
+				Options: []string{"oauth", "api_key"},
+				Default: "oauth",
+			},
+		},
+	}
+	if err := survey.Ask(questions, &answers); err != nil {
+		return err
+	}
+	if answers.Mode == "api_key" {
+		if err := survey.AskOne(&survey.Password{Message: "OpenAI 上游 API Key"}, &answers.UpstreamKey, survey.WithValidator(survey.Required)); err != nil {
+			return err
+		}
+	}
+
+	cfg := buildInitConfig(configDir, answers.LocalAPIKey, answers.Mode, answers.UpstreamKey)
+	ui.PrintLines(out, ui.Section("即将写入"), ui.KV("配置文件", configPath), ui.KV("运行时目录", cfg.Runtime.Dir), ui.KV("OAuth 凭证文件", cfg.OAuth.CredentialsFile))
+	if err := survey.AskOne(&survey.Confirm{Message: "确认写入配置？", Default: true}, &answers.Confirm); err != nil {
+		return err
+	}
+	if !answers.Confirm {
+		return errors.New("initialization cancelled")
+	}
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(configPath, data, defaultConfigFileMode); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	printInitNextSteps(out, configPath, cfg)
+	return nil
 }

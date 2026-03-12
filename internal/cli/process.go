@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"codex-gateway/internal/config"
+	"codex-gateway/internal/ui"
 )
 
 const (
@@ -36,32 +37,37 @@ type State struct {
 }
 
 func writeUsage(w io.Writer) {
-	_, _ = fmt.Fprintf(w, strings.TrimSpace(`
-Codex Gateway
-
-Usage:
-  server init    -config ~/.codex-gateway/config.yaml [-force]
-  server serve   -config ~/.codex-gateway/config.yaml
-  server start   -config ~/.codex-gateway/config.yaml
-  server stop    -config ~/.codex-gateway/config.yaml
-  server restart -config ~/.codex-gateway/config.yaml
-  server status  -config ~/.codex-gateway/config.yaml
-  server logs    -config ~/.codex-gateway/config.yaml [-n 100]
-  server help
-
-Auth:
-  server auth login   -config ~/.codex-gateway/config.yaml
-  server auth status  -config ~/.codex-gateway/config.yaml
-  server auth refresh -config ~/.codex-gateway/config.yaml
-
-Notes:
-  - run 'init' first if you have not created a config yet.
-  - 'serve' runs in the foreground.
-  - if -config is omitted, the default config path is ~/.codex-gateway/config.yaml.
-  - 'start' launches a background process and writes runtime state into ~/.codex-gateway by default.
-  - logs are written to the configured runtime log file.
-`))
-	_, _ = io.WriteString(w, "\n")
+	ui.PrintLines(w,
+		ui.Banner(),
+		ui.Section("常用命令"),
+		"  codexgateway init    -config ~/.codex-gateway/config.yaml [-force]",
+		"  codexgateway serve   -config ~/.codex-gateway/config.yaml",
+		"  codexgateway start   -config ~/.codex-gateway/config.yaml",
+		"  codexgateway stop    -config ~/.codex-gateway/config.yaml",
+		"  codexgateway restart -config ~/.codex-gateway/config.yaml",
+		"  codexgateway doctor  -config ~/.codex-gateway/config.yaml",
+		"  codexgateway status  -config ~/.codex-gateway/config.yaml",
+		"  codexgateway logs    -config ~/.codex-gateway/config.yaml [-n 100]",
+		"  codexgateway help",
+		"",
+		ui.Section("认证命令"),
+		"  codexgateway auth login   -config ~/.codex-gateway/config.yaml",
+		"  codexgateway auth status  -config ~/.codex-gateway/config.yaml",
+		"  codexgateway auth refresh -config ~/.codex-gateway/config.yaml",
+		"",
+		ui.Section("缩写"),
+		"  cgw start",
+		"  cgw doctor",
+		"  cgw status",
+		"  cgw logs -n 100",
+		"",
+		ui.Section("说明"),
+		"  - 首次使用先执行 init。",
+		"  - 不带子命令时默认等价于 serve。",
+		"  - 默认配置路径为 ~/.codex-gateway/config.yaml。",
+		"  - start 会后台启动，并把运行状态写入 ~/.codex-gateway。",
+		"  - 所有日志都会写入 runtime.log_file。",
+	)
 }
 
 func Help(w io.Writer) error {
@@ -78,7 +84,7 @@ func Start(ctx context.Context, configPath string, cfg *config.Config, w io.Writ
 	}
 
 	if state, err := readState(cfg.Runtime.StateFile); err == nil && processExists(state.PID) {
-		_, _ = fmt.Fprintf(w, "already running: pid=%d addr=%s\n", state.PID, state.Address)
+		ui.PrintLines(w, ui.Warn(fmt.Sprintf("服务已在运行 pid=%d", state.PID)), ui.KV("地址", state.Address), ui.KV("日志", state.LogFile))
 		return nil
 	}
 	_ = removeRuntimeFiles(cfg)
@@ -113,7 +119,7 @@ func Start(ctx context.Context, configPath string, cfg *config.Config, w io.Writ
 	if err != nil {
 		return fmt.Errorf("read runtime state after start: %w", err)
 	}
-	_, _ = fmt.Fprintf(w, "started: pid=%d addr=%s log=%s\n", state.PID, state.Address, state.LogFile)
+	ui.PrintLines(w, ui.Success("服务已启动"), ui.KV("PID", fmt.Sprintf("%d", state.PID)), ui.KV("地址", state.Address), ui.KV("日志", state.LogFile))
 	return nil
 }
 
@@ -124,14 +130,14 @@ func Stop(cfg *config.Config, w io.Writer) error {
 	state, err := readState(cfg.Runtime.StateFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			_, _ = fmt.Fprintf(w, "already stopped\n")
+			ui.PrintLines(w, ui.Warn("服务当前未运行"))
 			return nil
 		}
 		return err
 	}
 	if !processExists(state.PID) {
 		_ = removeRuntimeFiles(cfg)
-		_, _ = fmt.Fprintf(w, "stopped stale state: pid=%d\n", state.PID)
+		ui.PrintLines(w, ui.Warn(fmt.Sprintf("检测到过期状态文件，已清理 pid=%d", state.PID)))
 		return nil
 	}
 
@@ -142,7 +148,7 @@ func Stop(cfg *config.Config, w io.Writer) error {
 	for time.Now().Before(deadline) {
 		if !processExists(state.PID) {
 			_ = removeRuntimeFiles(cfg)
-			_, _ = fmt.Fprintf(w, "stopped: pid=%d\n", state.PID)
+			ui.PrintLines(w, ui.Success(fmt.Sprintf("服务已停止 pid=%d", state.PID)))
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -151,7 +157,7 @@ func Stop(cfg *config.Config, w io.Writer) error {
 		return fmt.Errorf("force kill process %d: %w", state.PID, err)
 	}
 	_ = removeRuntimeFiles(cfg)
-	_, _ = fmt.Fprintf(w, "killed: pid=%d\n", state.PID)
+	ui.PrintLines(w, ui.Warn(fmt.Sprintf("服务无响应，已强制结束 pid=%d", state.PID)))
 	return nil
 }
 
@@ -169,7 +175,7 @@ func Status(cfg *config.Config, w io.Writer) error {
 	state, err := readState(cfg.Runtime.StateFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			_, _ = fmt.Fprintf(w, "status: stopped\nlog_file: %s\npid_file: %s\n", cfg.Runtime.LogFile, cfg.Runtime.PIDFile)
+			ui.PrintLines(w, ui.Warn("服务未运行"), ui.KV("日志文件", cfg.Runtime.LogFile), ui.KV("PID 文件", cfg.Runtime.PIDFile))
 			return nil
 		}
 		return err
@@ -179,10 +185,22 @@ func Status(cfg *config.Config, w io.Writer) error {
 	if running {
 		status = "running"
 	}
-	_, _ = fmt.Fprintf(w, "status: %s\npid: %d\naddr: %s\nstarted_at: %s\nconfig: %s\nlog_file: %s\npid_file: %s\n",
-		status, state.PID, state.Address, state.StartedAt.Format(time.RFC3339), state.ConfigPath, state.LogFile, cfg.Runtime.PIDFile)
+	header := ui.Success("服务运行中")
 	if !running {
-		_, _ = io.WriteString(w, "note: stale runtime state detected\n")
+		header = ui.Warn("服务未运行，但存在旧状态文件")
+	}
+	ui.PrintLines(w,
+		header,
+		ui.KV("状态", status),
+		ui.KV("PID", fmt.Sprintf("%d", state.PID)),
+		ui.KV("地址", state.Address),
+		ui.KV("启动时间", state.StartedAt.Format(time.RFC3339)),
+		ui.KV("配置文件", state.ConfigPath),
+		ui.KV("日志文件", state.LogFile),
+		ui.KV("PID 文件", cfg.Runtime.PIDFile),
+	)
+	if !running {
+		ui.PrintLines(w, ui.Muted("提示：可以执行 codexgateway start 或 codexgateway stop 清理状态。"))
 	}
 	return nil
 }

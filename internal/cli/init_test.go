@@ -25,7 +25,7 @@ func TestInit_ShowsFriendlyMessageWhenConfigAlreadyExists(t *testing.T) {
 	if !strings.Contains(output, "已检测到现有配置文件") {
 		t.Fatalf("expected friendly existing-config message, got: %q", output)
 	}
-	if !strings.Contains(output, "codexgateway init -force") {
+	if !strings.Contains(output, "codexgateway init --force") {
 		t.Fatalf("expected force hint, got: %q", output)
 	}
 	if !strings.Contains(output, "codexgateway start") {

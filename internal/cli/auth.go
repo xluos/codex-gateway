@@ -10,6 +10,7 @@ import (
 
 	"codex-gateway/internal/config"
 	"codex-gateway/internal/oauth"
+	"codex-gateway/internal/ui"
 )
 
 func AuthStatus(cfg *config.Config, out io.Writer) error {
@@ -18,8 +19,15 @@ func AuthStatus(cfg *config.Config, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "email: %s\nplan: %s\nexpires_at: %s\n", cred.Email, cred.PlanType, time.Unix(cred.ExpiresAt, 0).Format(time.RFC3339))
-	return err
+	ui.PrintLines(out,
+		ui.Banner(),
+		ui.Section("OAuth 凭证"),
+		ui.KV("邮箱", cred.Email),
+		ui.KV("套餐", cred.PlanType),
+		ui.KV("过期时间", time.Unix(cred.ExpiresAt, 0).Format(time.RFC3339)),
+		ui.KV("凭证文件", cfg.OAuth.CredentialsFile),
+	)
+	return nil
 }
 
 func AuthRefresh(ctx context.Context, cfg *config.Config, out io.Writer) error {
@@ -39,8 +47,8 @@ func AuthRefresh(ctx context.Context, cfg *config.Config, out io.Writer) error {
 	if err := store.Save(refreshed); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "refresh succeeded for %s\n", refreshed.Email)
-	return err
+	ui.PrintLines(out, ui.Success(fmt.Sprintf("刷新成功：%s", refreshed.Email)))
+	return nil
 }
 
 func AuthLogin(ctx context.Context, cfg *config.Config, out io.Writer) error {
@@ -58,14 +66,14 @@ func AuthLogin(ctx context.Context, cfg *config.Config, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "authorization URL:\n%s\n", session.AuthURL)
+	ui.PrintLines(out, ui.Banner(), ui.Section("OAuth 登录"), ui.KV("授权链接", session.AuthURL))
 
 	if cfg.OAuth.AutoOpenBrowser {
 		if err := openBrowser(session.AuthURL); err != nil {
-			_, _ = fmt.Fprintf(out, "failed to open browser automatically, open this URL manually:\n%s\n", session.AuthURL)
+			ui.PrintLines(out, ui.Warn("自动打开浏览器失败，请手动访问上面的授权链接。"))
 		}
 	} else {
-		_, _ = fmt.Fprintf(out, "open this URL in your browser:\n%s\n", session.AuthURL)
+		ui.PrintLines(out, ui.Muted("请在浏览器中打开上面的授权链接。"))
 	}
 
 	select {
@@ -83,8 +91,8 @@ func AuthLogin(ctx context.Context, cfg *config.Config, out io.Writer) error {
 		if err := store.Save(cred); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(out, "oauth login succeeded for %s\n", cred.Email)
-		return err
+		ui.PrintLines(out, ui.Success(fmt.Sprintf("OAuth 登录成功：%s", cred.Email)))
+		return nil
 	}
 }
 

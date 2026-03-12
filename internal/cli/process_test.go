@@ -17,10 +17,12 @@ func TestWriteUsage_IncludesProcessCommands(t *testing.T) {
 
 	text := out.String()
 	for _, want := range []string{
+		"cgw",
 		"serve",
 		"start",
 		"stop",
 		"restart",
+		"doctor",
 		"status",
 		"logs",
 		"help",
@@ -93,7 +95,7 @@ func TestStateSummary_ReportsMissingState(t *testing.T) {
 	}
 
 	text := out.String()
-	if !strings.Contains(text, "status: stopped") {
+	if !strings.Contains(text, "服务未运行") {
 		t.Fatalf("unexpected status output: %q", text)
 	}
 	if !strings.Contains(text, cfg.Runtime.LogFile) {

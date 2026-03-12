@@ -37,7 +37,7 @@ cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
 
 - 编译二进制到 `~/.codex-gateway/bin/codexgateway`
 - 创建缩写命令 `~/.codex-gateway/bin/cgw`
-- 如果 `~/.codex-gateway/config.yaml` 不存在，就自动用示例配置创建
+- 如果 `~/.codex-gateway/config.yaml` 不存在，会提示你执行 `codexgateway init`
 - 把 `~/.codex-gateway/bin` 写进你的 shell rc 文件，默认是 `~/.zshrc`
 
 安装完成后执行：
@@ -75,8 +75,22 @@ codexgateway init -config /path/to/config.yaml
 初始化向导会交互式询问：
 
 - 本地网关 API key
-- 上游认证模式：`api_key` 或 `oauth`
+- 上游认证模式：默认 `oauth`，也可以切换到 `api_key`
 - `api_key` 模式下的上游 OpenAI key
+
+同时会提供：
+
+- 顶部 CLI banner 和分组化提示
+- 自动生成的本地 API key，回车可直接接受，也可以手动覆盖
+- 初始化完成后再次打印本地 API key，方便你直接复制给客户端
+
+如果你不确定当前环境是否已经准备好，可以先执行：
+
+```bash
+codexgateway doctor
+```
+
+它会检查配置、OAuth 凭证、运行目录、状态文件和监听端口。
 
 同时它会把日志、pid、runtime state、OAuth 凭证默认放到配置文件所在目录，避免一份配置配出两套运行时状态。
 
@@ -116,6 +130,12 @@ codexgateway init
 
 ```bash
 codexgateway start
+```
+
+环境诊断：
+
+```bash
+codexgateway doctor
 ```
 
 查看状态：
