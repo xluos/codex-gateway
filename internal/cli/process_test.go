@@ -102,3 +102,17 @@ func TestStateSummary_ReportsMissingState(t *testing.T) {
 		t.Fatalf("expected log file in status output: %q", text)
 	}
 }
+
+func TestBackgroundServeArgs_UsesLongConfigFlag(t *testing.T) {
+	args := backgroundServeArgs("/tmp/config.yaml")
+
+	want := []string{"serve", "--config", "/tmp/config.yaml"}
+	if len(args) != len(want) {
+		t.Fatalf("unexpected args length: got %d want %d (%v)", len(args), len(want), args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("unexpected arg at index %d: got %q want %q (all args: %v)", i, args[i], want[i], args)
+		}
+	}
+}

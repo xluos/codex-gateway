@@ -133,6 +133,12 @@ func checkRuntimeStateHealth(cfg *config.Config, out io.Writer) error {
 
 func checkPortHealth(cfg *config.Config, out io.Writer) error {
 	addr := net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port))
+
+	if state, err := readState(cfg.Runtime.StateFile); err == nil && processExists(state.PID) && state.Address == addr {
+		ui.PrintLines(out, ui.Success("监听端口已由当前服务占用"), ui.KV("地址", addr), ui.KV("PID", fmt.Sprintf("%d", state.PID)))
+		return nil
+	}
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		ui.PrintLines(out, ui.Warn("监听端口不可用"), ui.KV("地址", addr), ui.Muted("如果服务未运行，可能被其他进程占用。"))

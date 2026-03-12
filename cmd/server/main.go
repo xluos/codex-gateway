@@ -61,12 +61,14 @@ func newRootCommand(app *appContext) *cobra.Command {
 			return serve(app.configPath, cfg)
 		},
 	}
+	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().StringVar(&app.configPath, "config", defaultConfigPath(), "path to config file")
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		_ = cli.Help(app.stdout)
 	})
 
 	root.AddCommand(
+		newCompletionCommand(root),
 		newInitCommand(app),
 		newServeCommand(app),
 		newStartCommand(app),
@@ -78,6 +80,28 @@ func newRootCommand(app *appContext) *cobra.Command {
 		newAuthCommand(app),
 	)
 	return root
+}
+
+func newCompletionCommand(root *cobra.Command) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:       "completion [bash|zsh|fish]",
+		Short:     "Generate shell completion script",
+		ValidArgs: []string{"bash", "zsh", "fish"},
+		Args:      cobra.ExactValidArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return root.GenBashCompletionV2(cmd.OutOrStdout(), true)
+			case "zsh":
+				return root.GenZshCompletion(cmd.OutOrStdout())
+			case "fish":
+				return root.GenFishCompletion(cmd.OutOrStdout(), true)
+			default:
+				return fmt.Errorf("unsupported shell: %s", args[0])
+			}
+		},
+	}
+	return cmd
 }
 
 func newInitCommand(app *appContext) *cobra.Command {

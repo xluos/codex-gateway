@@ -27,6 +27,10 @@ func BackgroundStdoutEnvVar() string {
 	return backgroundEnvVar
 }
 
+func backgroundServeArgs(configPath string) []string {
+	return []string{"serve", "--config", configPath}
+}
+
 type State struct {
 	Version    int       `json:"version"`
 	PID        int       `json:"pid"`
@@ -48,6 +52,7 @@ func writeUsage(w io.Writer) {
 		"  codexgateway doctor  -config ~/.codex-gateway/config.yaml",
 		"  codexgateway status  -config ~/.codex-gateway/config.yaml",
 		"  codexgateway logs    -config ~/.codex-gateway/config.yaml [-n 100]",
+		"  codexgateway completion zsh|bash|fish",
 		"  codexgateway help",
 		"",
 		ui.Section("认证命令"),
@@ -67,6 +72,7 @@ func writeUsage(w io.Writer) {
 		"  - 默认配置路径为 ~/.codex-gateway/config.yaml。",
 		"  - start 会后台启动，并把运行状态写入 ~/.codex-gateway。",
 		"  - 所有日志都会写入 runtime.log_file。",
+		"  - completion 可生成 shell 补全脚本。",
 	)
 }
 
@@ -99,7 +105,7 @@ func Start(ctx context.Context, configPath string, cfg *config.Config, w io.Writ
 	}
 	defer logFile.Close()
 
-	cmd := exec.CommandContext(ctx, exePath, "serve", "-config", configPath)
+	cmd := exec.CommandContext(ctx, exePath, backgroundServeArgs(configPath)...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = append(os.Environ(), backgroundEnvVar+"=0")

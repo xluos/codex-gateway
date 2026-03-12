@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,26 @@ import (
 	"codex-gateway/internal/config"
 	"codex-gateway/internal/oauth"
 )
+
+func reserveTCPPort(t *testing.T) (string, int) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	defer listener.Close()
+
+	host, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort returned error: %v", err)
+	}
+	port, err := net.LookupPort("tcp", portText)
+	if err != nil {
+		t.Fatalf("LookupPort returned error: %v", err)
+	}
+	return host, port
+}
 
 func TestDoctor_ReportsMissingConfig(t *testing.T) {
 	var out bytes.Buffer
@@ -28,6 +50,8 @@ func TestDoctor_ReportsMissingConfig(t *testing.T) {
 }
 
 func TestDoctor_ReportsHealthyOAuthSetup(t *testing.T) {
+	host, port := reserveTCPPort(t)
+
 	baseDir := t.TempDir()
 	configPath := filepath.Join(baseDir, "config.yaml")
 	credPath := filepath.Join(baseDir, "openai-oauth.json")
@@ -35,8 +59,8 @@ func TestDoctor_ReportsHealthyOAuthSetup(t *testing.T) {
 
 	cfgText := `
 server:
-  host: 127.0.0.1
-  port: 9867
+  host: ` + host + `
+  port: ` + fmt.Sprintf("%d", port) + `
 auth:
   api_keys:
     - local-key
@@ -146,5 +170,71 @@ server:
 	}
 	if !strings.Contains(out.String(), "检测到过期状态文件") {
 		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestDoctor_DoesNotReportPortUnavailableWhenServiceIsRunning(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen returned error: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+	host, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort returned error: %v", err)
+	}
+	port, err := net.LookupPort("tcp", portText)
+	if err != nil {
+		t.Fatalf("LookupPort returned error: %v", err)
+	}
+
+	baseDir := t.TempDir()
+	runtimeDir := filepath.Join(baseDir, "runtime")
+	configPath := filepath.Join(baseDir, "config.yaml")
+	pidFile := filepath.Join(runtimeDir, "codex-gateway.pid")
+	logFile := filepath.Join(runtimeDir, "codex-gateway.log")
+	stateFile := filepath.Join(runtimeDir, "codex-gateway.json")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configText := fmt.Sprintf(`
+auth:
+  api_keys:
+    - local-key
+upstream:
+  base_url: https://api.openai.com
+  api_key: sk-test
+runtime:
+  dir: %s
+  pid_file: %s
+  log_file: %s
+  state_file: %s
+server:
+  host: %s
+  port: %d
+`, runtimeDir, pidFile, logFile, stateFile, host, port)
+	if err := os.WriteFile(configPath, []byte(configText), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := writeState(stateFile, State{
+		PID:        os.Getpid(),
+		Address:    addr,
+		LogFile:    logFile,
+		ConfigPath: configPath,
+		StartedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("writeState returned error: %v", err)
+	}
+
+	var out bytes.Buffer
+	err = Doctor(configPath, &out)
+	if err != nil {
+		t.Fatalf("Doctor returned error: %v\noutput: %s", err, out.String())
+	}
+	if strings.Contains(out.String(), "监听端口不可用") {
+		t.Fatalf("expected doctor not to report port unavailable, got: %q", out.String())
 	}
 }
