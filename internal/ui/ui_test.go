@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+const expectedPlainBanner = "" +
+	"   ____          __           \n" +
+	"  / ___|___   __/ /___  _  __\n" +
+	" | |   / _ \\ /_  / _ \\| |/_/\n" +
+	" | |__| (_) | / /  __/>  <  \n" +
+	"  \\____\\___/ /_/ \\___/_/|_|  \n" +
+	"\n" +
+	"    ____       __                                 \n" +
+	"   / ___|___ _/ /____ _      ______ ___  _______ \n" +
+	"  / / __/ _ `/ __/ _ \\ | /| / / __ `/ / / / _ \\\n" +
+	" / /_/ / (_/ / /_/  __/ |/ |/ / /_/ / /_/ /  __/\n" +
+	" \\____/\\__,_/\\__/\\___/|__/|__/\\__,_/\\__, /\\___/ \n" +
+	"                                   /____/       \n"
+
 func TestBannerForWriter_UsesPlainBannerWhenNO_COLORIsSet(t *testing.T) {
 	var out bytes.Buffer
 
@@ -27,6 +41,18 @@ func TestBannerForWriter_UsesPlainBannerWhenNO_COLORIsSet(t *testing.T) {
 	}
 	if !strings.Contains(got, "Codex Gateway") {
 		t.Fatalf("expected banner to include project title")
+	}
+}
+
+func TestBannerAssets_MatchSelectedWordmark(t *testing.T) {
+	if bannerPlain != expectedPlainBanner {
+		t.Fatalf("plain banner does not match approved wordmark")
+	}
+	if !strings.Contains(bannerANSI, "\x1b[38;2;80;200;255m   ____          __") {
+		t.Fatalf("ansi banner does not start with the approved gradient wordmark")
+	}
+	if strings.Contains(bannerANSI, "█") {
+		t.Fatalf("ansi banner should not use block characters")
 	}
 }
 
