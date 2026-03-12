@@ -40,6 +40,7 @@ func writeUsage(w io.Writer) {
 Codex Gateway
 
 Usage:
+  server init    -config ~/.codex-gateway/config.yaml [-force]
   server serve   -config ~/.codex-gateway/config.yaml
   server start   -config ~/.codex-gateway/config.yaml
   server stop    -config ~/.codex-gateway/config.yaml
@@ -54,6 +55,7 @@ Auth:
   server auth refresh -config ~/.codex-gateway/config.yaml
 
 Notes:
+  - run 'init' first if you have not created a config yet.
   - 'serve' runs in the foreground.
   - if -config is omitted, the default config path is ~/.codex-gateway/config.yaml.
   - 'start' launches a background process and writes runtime state into ~/.codex-gateway by default.

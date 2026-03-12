@@ -28,9 +28,7 @@ ensure_dirs() {
 
 install_config_if_missing() {
   if [[ ! -f "$CONFIG_PATH" ]]; then
-    cp "$ROOT_DIR/config.example.yaml" "$CONFIG_PATH"
-    chmod 600 "$CONFIG_PATH"
-    printf '[install] created default config: %s\n' "$CONFIG_PATH"
+    printf '[install] config not found, run "codexgateway init" after installation: %s\n' "$CONFIG_PATH"
   fi
 }
 
@@ -85,6 +83,7 @@ main() {
   printf '\n'
   printf 'next:\n'
   printf '  source %s\n' "$rc_file"
+  printf '  codexgateway init\n'
   printf '  codexgateway help\n'
   printf '  cgw help\n'
 }

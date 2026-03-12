@@ -33,6 +33,8 @@ func run(args []string, stdout io.Writer) error {
 	switch command {
 	case "help":
 		return cli.Help(stdout)
+	case "init":
+		return runInit(commandArgs, stdout)
 	case "auth":
 		return runAuth(commandArgs)
 	case "start":
@@ -60,7 +62,7 @@ func parseCommand(args []string) (string, []string) {
 	switch first {
 	case "help", "-h", "--help":
 		return "help", args[1:]
-	case "auth", "serve", "start", "stop", "restart", "status", "logs":
+	case "auth", "init", "serve", "start", "stop", "restart", "status", "logs":
 		return first, args[1:]
 	default:
 		if strings.HasPrefix(first, "-") {
@@ -96,6 +98,17 @@ func runAuth(args []string) error {
 	default:
 		return fmt.Errorf("unknown auth command: %s", args[0])
 	}
+}
+
+func runInit(args []string, stdout io.Writer) error {
+	initFlags := flag.NewFlagSet("init", flag.ContinueOnError)
+	initFlags.SetOutput(io.Discard)
+	configPath := initFlags.String("config", defaultConfigPath(), "path to config file")
+	force := initFlags.Bool("force", false, "overwrite existing config")
+	if err := initFlags.Parse(args); err != nil {
+		return fmt.Errorf("parse init flags: %w", err)
+	}
+	return cli.Init(*configPath, *force, os.Stdin, stdout)
 }
 
 func runServe(args []string) error {

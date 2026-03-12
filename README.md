@@ -44,7 +44,7 @@ cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
 
 ```bash
 source ~/.zshrc
-codexgateway help
+codexgateway init
 cgw help
 ```
 
@@ -60,12 +60,25 @@ cd /Users/bytedance/Documents/AIWorkspace/codex-gateway
 - 安装脚本只能修改 shell 配置文件，不能直接改掉“当前已经打开的 shell 进程”的环境变量，所以安装后需要 `source` 一次。
 - 安装脚本不会删除你的 `~/.codex-gateway/config.yaml`、日志和 OAuth 凭证，卸载时只会移除二进制和 PATH 配置块。
 
-1. 准备配置文件
+1. 初始化配置文件
 
 ```bash
-mkdir -p ~/.codex-gateway
-cp /Users/bytedance/Documents/AIWorkspace/codex-gateway/config.example.yaml ~/.codex-gateway/config.yaml
+codexgateway init
 ```
+
+如果你需要把配置放到别的地方：
+
+```bash
+codexgateway init -config /path/to/config.yaml
+```
+
+初始化向导会交互式询问：
+
+- 本地网关 API key
+- 上游认证模式：`api_key` 或 `oauth`
+- `api_key` 模式下的上游 OpenAI key
+
+同时它会把日志、pid、runtime state、OAuth 凭证默认放到配置文件所在目录，避免一份配置配出两套运行时状态。
 
 2. 修改 `~/.codex-gateway/config.yaml`
 
@@ -91,6 +104,12 @@ go run ./cmd/server -config /path/to/config.yaml
 
 ```bash
 codexgateway help
+```
+
+初始化：
+
+```bash
+codexgateway init
 ```
 
 后台启动：
