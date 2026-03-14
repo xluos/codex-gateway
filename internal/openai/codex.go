@@ -25,6 +25,14 @@ type Model struct {
 	DisplayName string `json:"display_name,omitempty"`
 }
 
+type ResponsesStateDiagnostics struct {
+	PreviousResponseID string
+	ReferencedItemIDs  []string
+	ItemReferenceCount int
+	SystemMessageCount int
+	DeveloperMessageCount int
+}
+
 var DefaultModels = []Model{
 	{ID: "gpt-5.4", Object: "model", Created: 1738368000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.4"},
 	{ID: "gpt-5.3-codex", Object: "model", Created: 1735689600, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.3 Codex"},
@@ -54,14 +62,10 @@ func NormalizeCodexResponsesRequest(body []byte) ([]byte, error) {
 	if model, ok := req["model"].(string); ok {
 		req["model"] = normalizeCodexModel(model)
 	}
-	if _, ok := req["instructions"]; !ok {
-		req["instructions"] = defaultInstructions
-	} else if instructions, ok := req["instructions"].(string); ok && strings.TrimSpace(instructions) == "" {
-		req["instructions"] = defaultInstructions
-	}
 
 	req["store"] = false
 	req["stream"] = true
+	delete(req, "previous_response_id")
 
 	for _, key := range []string{
 		"max_output_tokens",
@@ -78,12 +82,44 @@ func NormalizeCodexResponsesRequest(body []byte) ([]byte, error) {
 	case string:
 		req["input"] = []any{newUserMessage(strings.TrimSpace(input))}
 	case []any:
-		req["input"] = normalizeInputItems(input)
+		normalizedInput, extractedInstructions := normalizeInputItems(input)
+		req["input"] = normalizedInput
+		req["instructions"] = mergedInstructions(req["instructions"], extractedInstructions)
 	case nil:
 		req["input"] = []any{}
 	}
+	if _, ok := req["instructions"]; !ok {
+		req["instructions"] = defaultInstructions
+	} else if instructions, ok := req["instructions"].(string); ok && strings.TrimSpace(instructions) == "" {
+		req["instructions"] = defaultInstructions
+	}
 
 	return json.Marshal(req)
+}
+
+func StripPreviousResponseID(body []byte) ([]byte, error) {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
+	delete(req, "previous_response_id")
+	return json.Marshal(req)
+}
+
+func InspectResponsesState(body []byte) (ResponsesStateDiagnostics, error) {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return ResponsesStateDiagnostics{}, err
+	}
+
+	var diag ResponsesStateDiagnostics
+	if previous, ok := req["previous_response_id"].(string); ok {
+		diag.PreviousResponseID = strings.TrimSpace(previous)
+	}
+	if input, ok := req["input"].([]any); ok {
+		inspectInputState(input, &diag)
+	}
+	return diag, nil
 }
 
 func NewSessionID() string {
@@ -94,9 +130,9 @@ func NewSessionID() string {
 	return hex.EncodeToString(buf[:])
 }
 
-func normalizeInputItems(items []any) []any {
+func normalizeInputItems(items []any) ([]any, string) {
 	if len(items) == 0 {
-		return []any{}
+		return []any{}, ""
 	}
 
 	if parts, ok := normalizeStandaloneInputParts(items); ok {
@@ -106,19 +142,31 @@ func normalizeInputItems(items []any) []any {
 				"role":    "user",
 				"content": parts,
 			},
-		}
+		}, ""
 	}
 
 	normalized := make([]any, 0, len(items))
+	var instructions []string
 	for _, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
 			normalized = append(normalized, item)
 			continue
 		}
-		normalized = append(normalized, normalizeMessageItem(m))
+		itemType := strings.TrimSpace(strings.ToLower(stringValue(m["type"])))
+		if itemType == "item_reference" || itemType == "reference" {
+			continue
+		}
+		role := strings.TrimSpace(strings.ToLower(stringValue(m["role"])))
+		if role == "system" || role == "developer" {
+			if text := instructionText(m["content"]); text != "" {
+				instructions = append(instructions, text)
+			}
+			continue
+		}
+		normalized = append(normalized, stripReferencedIDs(normalizeMessageItem(m)))
 	}
-	return normalized
+	return normalized, strings.Join(instructions, "\n\n")
 }
 
 func normalizeStandaloneInputParts(items []any) ([]any, bool) {
@@ -182,6 +230,109 @@ func normalizeContentPart(item map[string]any) (map[string]any, bool) {
 		return out, true
 	default:
 		return nil, false
+	}
+}
+
+func mergedInstructions(existing any, extracted string) string {
+	base := strings.TrimSpace(stringValue(existing))
+	extracted = strings.TrimSpace(extracted)
+	switch {
+	case base == "":
+		return extracted
+	case extracted == "":
+		return base
+	default:
+		return base + "\n\n" + extracted
+	}
+}
+
+func instructionText(content any) string {
+	switch value := content.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			partType := strings.TrimSpace(strings.ToLower(stringValue(m["type"])))
+			if partType != "" && partType != "text" && partType != "input_text" {
+				continue
+			}
+			text := strings.TrimSpace(stringValue(m["text"]))
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
+
+func stripReferencedIDs(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, child := range v {
+			if key == "id" {
+				if id, ok := child.(string); ok && looksLikeStoredItemID(id) {
+					continue
+				}
+			}
+			out[key] = stripReferencedIDs(child)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, child := range v {
+			out = append(out, stripReferencedIDs(child))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func looksLikeStoredItemID(id string) bool {
+	id = strings.TrimSpace(id)
+	return strings.HasPrefix(id, "rs_") || strings.HasPrefix(id, "resp_") || strings.HasPrefix(id, "msg_")
+}
+
+func inspectInputState(items []any, diag *ResponsesStateDiagnostics) {
+	for _, item := range items {
+		inspectStateValue(item, diag)
+	}
+}
+
+func inspectStateValue(value any, diag *ResponsesStateDiagnostics) {
+	switch v := value.(type) {
+	case map[string]any:
+		itemType := strings.TrimSpace(strings.ToLower(stringValue(v["type"])))
+		if itemType == "item_reference" || itemType == "reference" {
+			diag.ItemReferenceCount++
+		}
+		role := strings.TrimSpace(strings.ToLower(stringValue(v["role"])))
+		switch role {
+		case "system":
+			diag.SystemMessageCount++
+		case "developer":
+			diag.DeveloperMessageCount++
+		}
+		for key, child := range v {
+			if key == "id" {
+				if id, ok := child.(string); ok && looksLikeStoredItemID(id) {
+					diag.ReferencedItemIDs = append(diag.ReferencedItemIDs, strings.TrimSpace(id))
+				}
+			}
+			inspectStateValue(child, diag)
+		}
+	case []any:
+		for _, child := range v {
+			inspectStateValue(child, diag)
+		}
 	}
 }
 

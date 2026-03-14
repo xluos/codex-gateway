@@ -314,6 +314,8 @@ func ioNopCloser(body []byte) io.ReadCloser {
 }
 
 func (h *OpenAIHandler) proxyWithAccountPool(w http.ResponseWriter, r *http.Request, body []byte, start time.Time, path string) {
+	h.logResponsesStateDiagnostics(r.URL.Path, body)
+
 	requestedModel, err := requestModel(body)
 	if err != nil {
 		h.logRequest(requestLogFields{
@@ -369,6 +371,13 @@ func (h *OpenAIHandler) proxyWithAccountPool(w http.ResponseWriter, r *http.Requ
 		if bodyErr != nil {
 			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", bodyErr.Error())
 			return
+		}
+		if path == "/v1/responses" {
+			mutatedBody, bodyErr = openai.StripPreviousResponseID(mutatedBody)
+			if bodyErr != nil {
+				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "failed to encode request body")
+				return
+			}
 		}
 
 		var req *http.Request
@@ -571,6 +580,8 @@ func writeOpenAIError(w http.ResponseWriter, status int, errType, message string
 }
 
 func (h *OpenAIHandler) proxyOAuthResponses(w http.ResponseWriter, r *http.Request, body []byte, start time.Time) {
+	h.logResponsesStateDiagnostics(r.URL.Path, body)
+
 	normalizedBody, err := openai.NormalizeCodexResponsesRequest(body)
 	if err != nil {
 		h.logRequest(requestLogFields{
@@ -722,6 +733,29 @@ func (h *OpenAIHandler) proxyOAuthChatCompletions(w http.ResponseWriter, r *http
 		requestID:    resp.Header.Get("X-Request-ID"),
 		requestBody:  logBody(h.debugDumpHTTP, normalizedBody),
 	})
+}
+
+func (h *OpenAIHandler) logResponsesStateDiagnostics(path string, body []byte) {
+	if !h.debugDumpHTTP || len(body) == 0 || h.logger == nil {
+		return
+	}
+	diag, err := openai.InspectResponsesState(body)
+	if err != nil {
+		h.logger.Printf("codex-gateway responses_state_inspect_failed path=%s error=%q", path, err.Error())
+		return
+	}
+	if diag.PreviousResponseID == "" && len(diag.ReferencedItemIDs) == 0 && diag.ItemReferenceCount == 0 && diag.SystemMessageCount == 0 && diag.DeveloperMessageCount == 0 {
+		return
+	}
+	h.logger.Printf(
+		"codex-gateway responses_state_detected path=%s previous_response_id=%q referenced_item_ids=%q item_reference_count=%d system_message_count=%d developer_message_count=%d",
+		path,
+		diag.PreviousResponseID,
+		strings.Join(diag.ReferencedItemIDs, ","),
+		diag.ItemReferenceCount,
+		diag.SystemMessageCount,
+		diag.DeveloperMessageCount,
+	)
 }
 
 func (h *OpenAIHandler) buildPoolOAuthCodexRequest(r *http.Request, account *upstream.PoolAccount, body []byte) (*http.Request, error) {

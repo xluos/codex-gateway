@@ -280,6 +280,51 @@ func TestResponsesHandler_LogsUpstreamFailureDetails(t *testing.T) {
 	}
 }
 
+func TestResponsesHandler_LogsDetectedStateReferencesInDebugMode(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstreamServer.Close()
+
+	logSink := &testLogSink{}
+	h := NewOpenAIHandler(
+		upstream.NewOAuthClient(upstreamServer.URL, testTokenSource{token: "oauth-at"}, time.Minute),
+		WithCredentialsLoader(testCredentialsLoader{cred: &oauth.Credentials{ChatGPTAccountID: "chatgpt-acc"}}),
+		WithLogger(logSink),
+		WithDebugDumpHTTP(true),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{
+		"model":"gpt-5.1-codex",
+		"previous_response_id":"resp_prev",
+		"input":[
+			{"id":"rs_old","role":"system","content":"Be terse"},
+			{"type":"item_reference","id":"rs_ref"},
+			{"role":"user","content":"Reply with ok."}
+		]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Responses(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	logs := logSink.String()
+	for _, want := range []string{
+		"responses_state_detected",
+		`previous_response_id="resp_prev"`,
+		`referenced_item_ids="rs_old,rs_ref"`,
+		"item_reference_count=1",
+		"system_message_count=1",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("expected logs to contain %q, got %s", want, logs)
+		}
+	}
+}
+
 func TestChatCompletionsHandler_FailsOverOnQuotaLimitedAccount(t *testing.T) {
 	var primaryCalls int
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +390,35 @@ func TestResponsesHandler_UsesAccountDefaultModelWhenRequestOmitsModel(t *testin
 	}, nil, time.Minute)
 	h := NewOpenAIHandler(nil, WithAccountPool(pool))
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"Reply with ok."}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Responses(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestResponsesHandler_MultiAccountStripsPreviousResponseID(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if _, ok := payload["previous_response_id"]; ok {
+			t.Fatalf("expected previous_response_id to be removed, got %#v", payload["previous_response_id"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1"}`))
+	}))
+	defer upstreamServer.Close()
+
+	pool := upstream.NewOpenAIAccountPool([]config.NamedUpstreamConfig{
+		{Name: "primary", Mode: "api_key", BaseURL: upstreamServer.URL, APIKey: "sk-primary", Priority: 10, DefaultModel: "gpt-4.1-mini"},
+	}, nil, time.Minute)
+	h := NewOpenAIHandler(nil, WithAccountPool(pool))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-4.1-mini","input":"Reply with ok.","previous_response_id":"resp_123"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
