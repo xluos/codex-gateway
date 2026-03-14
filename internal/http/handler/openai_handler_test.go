@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"codex-gateway/internal/oauth"
+	"codex-gateway/internal/config"
 	"codex-gateway/internal/upstream"
 )
 
@@ -275,6 +277,233 @@ func TestResponsesHandler_LogsUpstreamFailureDetails(t *testing.T) {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("expected logs to contain %q, got %s", want, logs)
 		}
+	}
+}
+
+func TestChatCompletionsHandler_FailsOverOnQuotaLimitedAccount(t *testing.T) {
+	var primaryCalls int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"insufficient_quota"}}`))
+	}))
+	defer primary.Close()
+
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if string(body) != `{"model":"gpt-4.1","stream":false}` {
+			t.Fatalf("unexpected body: %s", string(body))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Codex-5h-Used-Percent", "55")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_backup"}`))
+	}))
+	defer backup.Close()
+
+	pool := upstream.NewOpenAIAccountPool([]config.NamedUpstreamConfig{
+		{Name: "primary", Mode: "api_key", BaseURL: primary.URL, APIKey: "sk-primary", Priority: 10, DefaultModel: "gpt-4.1", CooldownSeconds: 60},
+		{Name: "backup", Mode: "api_key", BaseURL: backup.URL, APIKey: "sk-backup", Priority: 20, DefaultModel: "gpt-4.1"},
+	}, nil, time.Minute)
+	h := NewOpenAIHandler(nil, WithAccountPool(pool))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4.1","stream":false}`))
+	w := httptest.NewRecorder()
+
+	h.ChatCompletions(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if primaryCalls != 1 {
+		t.Fatalf("expected one primary call, got %d", primaryCalls)
+	}
+	statuses := pool.AccountsStatus()
+	if statuses[0].Name != "primary" || statuses[0].Status != "cooldown" {
+		t.Fatalf("unexpected primary status: %#v", statuses[0])
+	}
+}
+
+func TestResponsesHandler_UsesAccountDefaultModelWhenRequestOmitsModel(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if payload["model"] != "gpt-4.1-mini" {
+			t.Fatalf("unexpected model: %#v", payload["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1"}`))
+	}))
+	defer upstreamServer.Close()
+
+	pool := upstream.NewOpenAIAccountPool([]config.NamedUpstreamConfig{
+		{Name: "primary", Mode: "api_key", BaseURL: upstreamServer.URL, APIKey: "sk-primary", Priority: 10, DefaultModel: "gpt-4.1-mini"},
+	}, nil, time.Minute)
+	h := NewOpenAIHandler(nil, WithAccountPool(pool))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"Reply with ok."}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Responses(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestChatCompletionsHandler_LogsInstanceAccountAndModelContext(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"insufficient_quota"}}`))
+	}))
+	defer primary.Close()
+
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_backup"}`))
+	}))
+	defer backup.Close()
+
+	logSink := &testLogSink{}
+	pool := upstream.NewOpenAIAccountPool([]config.NamedUpstreamConfig{
+		{Name: "primary", Mode: "api_key", BaseURL: primary.URL, APIKey: "sk-primary", Priority: 10, DefaultModel: "gpt-4.1", CooldownSeconds: 60},
+		{Name: "backup", Mode: "api_key", BaseURL: backup.URL, APIKey: "sk-backup", Priority: 20, DefaultModel: "gpt-4.1-mini", ModelMapping: map[string]string{"gpt-4.1": "gpt-4.1-mini"}},
+	}, nil, time.Minute)
+	h := NewOpenAIHandler(
+		nil,
+		WithAccountPool(pool),
+		WithLogger(logSink),
+		WithInstanceLabel("127.0.0.1:19867"),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4.1","stream":false}`))
+	w := httptest.NewRecorder()
+
+	h.ChatCompletions(w, req)
+
+	logText := logSink.String()
+	for _, want := range []string{
+		"instance=127.0.0.1:19867",
+		"account=backup",
+		"requested_model=gpt-4.1",
+		"resolved_model=gpt-4.1-mini",
+		"failover_count=1",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("expected log to contain %q, got %q", want, logText)
+		}
+	}
+}
+
+func TestChatCompletionsHandler_PersistsAccountSnapshotAfterSuccess(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Codex-5h-Used-Percent", "55")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1"}`))
+	}))
+	defer upstreamServer.Close()
+
+	persisted := false
+	pool := upstream.NewOpenAIAccountPool([]config.NamedUpstreamConfig{
+		{Name: "primary", Mode: "api_key", BaseURL: upstreamServer.URL, APIKey: "sk-primary", Priority: 10, DefaultModel: "gpt-4.1"},
+	}, nil, time.Minute)
+	h := NewOpenAIHandler(
+		nil,
+		WithAccountPool(pool),
+		WithAccountStatusPersister(func(statuses []upstream.AccountStatus) error {
+			persisted = true
+			if len(statuses) != 1 || statuses[0].Codex5hUsedPercent == nil || *statuses[0].Codex5hUsedPercent != 55 {
+				t.Fatalf("unexpected persisted statuses: %#v", statuses)
+			}
+			return nil
+		}),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4.1","stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.ChatCompletions(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !persisted {
+		t.Fatal("expected account statuses to be persisted")
+	}
+}
+
+func TestChatCompletionsHandler_PersistenceFailureDoesNotFailRequest(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Codex-5h-Used-Percent", "55")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1"}`))
+	}))
+	defer upstreamServer.Close()
+
+	pool := upstream.NewOpenAIAccountPool([]config.NamedUpstreamConfig{
+		{Name: "primary", Mode: "api_key", BaseURL: upstreamServer.URL, APIKey: "sk-primary", Priority: 10, DefaultModel: "gpt-4.1"},
+	}, nil, time.Minute)
+	h := NewOpenAIHandler(
+		nil,
+		WithAccountPool(pool),
+		WithAccountStatusPersister(func([]upstream.AccountStatus) error {
+			return errors.New("disk full")
+		}),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-4.1","stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.ChatCompletions(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestChatCompletionsHandler_LegacyOAuthStillUsesAccountPoolWhenPresent(t *testing.T) {
+	legacyOAuth := upstream.NewOAuthClient("https://oauth.example.com", testTokenSource{token: "oauth-token"}, time.Minute)
+	poolServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/codex/responses" {
+			t.Fatalf("expected codex responses path, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`event: response.created`,
+			`data: {"type":"response.created","response":{"id":"chatcmpl_pool","model":"gpt-5.1-codex-mini","status":"in_progress"}}`,
+			``,
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","delta":"pool response"}`,
+			``,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"id":"chatcmpl_pool","model":"gpt-5.1-codex-mini","status":"completed","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"pool response"}]}]}}`,
+			``,
+		}, "\n")))
+	}))
+	defer poolServer.Close()
+
+	pool := upstream.NewOpenAIAccountPool([]config.NamedUpstreamConfig{
+		{Name: "default", Mode: "oauth", BaseURL: poolServer.URL, Priority: 0, DefaultModel: "gpt-5.1-codex-mini"},
+	}, map[string]upstream.AccessTokenSource{
+		"default": testTokenSource{token: "pool-token"},
+	}, time.Minute)
+
+	h := NewOpenAIHandler(legacyOAuth, WithAccountPool(pool))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-5.1-codex-mini","stream":false,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.ChatCompletions(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "chatcmpl_pool") {
+		t.Fatalf("expected pool-backed response, got %q", w.Body.String())
 	}
 }
 

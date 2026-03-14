@@ -12,13 +12,14 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Auth     AuthConfig     `yaml:"auth"`
-	Upstream UpstreamConfig `yaml:"upstream"`
-	OAuth    OAuthConfig    `yaml:"oauth"`
-	Runtime  RuntimeConfig  `yaml:"runtime"`
-	Logging  LoggingConfig  `yaml:"logging"`
-	Compat   CompatConfig   `yaml:"compat"`
+	Server    ServerConfig          `yaml:"server"`
+	Auth      AuthConfig            `yaml:"auth"`
+	Upstream  UpstreamConfig        `yaml:"upstream"`
+	Upstreams []NamedUpstreamConfig `yaml:"upstreams"`
+	OAuth     OAuthConfig           `yaml:"oauth"`
+	Runtime   RuntimeConfig         `yaml:"runtime"`
+	Logging   LoggingConfig         `yaml:"logging"`
+	Compat    CompatConfig          `yaml:"compat"`
 }
 
 type ServerConfig struct {
@@ -37,6 +38,25 @@ type UpstreamConfig struct {
 	BaseURL        string `yaml:"base_url"`
 	APIKey         string `yaml:"api_key"`
 	TimeoutSeconds int    `yaml:"timeout_seconds"`
+}
+
+type UpstreamOAuthConfig struct {
+	CredentialsFile string `yaml:"credentials_file"`
+}
+
+type NamedUpstreamConfig struct {
+	Name            string              `yaml:"name"`
+	Mode            string              `yaml:"mode"`
+	BaseURL         string              `yaml:"base_url"`
+	APIKey          string              `yaml:"api_key"`
+	Email           string              `yaml:"email"`
+	Password        string              `yaml:"password"`
+	TimeoutSeconds  int                 `yaml:"timeout_seconds"`
+	Priority        int                 `yaml:"priority"`
+	DefaultModel    string              `yaml:"default_model"`
+	ModelMapping    map[string]string   `yaml:"model_mapping"`
+	CooldownSeconds int                 `yaml:"cooldown_seconds"`
+	OAuth           UpstreamOAuthConfig `yaml:"oauth"`
 }
 
 type OAuthConfig struct {
@@ -128,21 +148,38 @@ func applyDefaults(cfg *Config) {
 	cfg.Runtime.PIDFile = expandPath(cfg.Runtime.PIDFile)
 	cfg.Runtime.LogFile = expandPath(cfg.Runtime.LogFile)
 	cfg.Runtime.StateFile = expandPath(cfg.Runtime.StateFile)
+	for i := range cfg.Upstreams {
+		if strings.TrimSpace(cfg.Upstreams[i].Mode) == "" {
+			cfg.Upstreams[i].Mode = "api_key"
+		}
+		if cfg.Upstreams[i].TimeoutSeconds == 0 {
+			cfg.Upstreams[i].TimeoutSeconds = cfg.Upstream.TimeoutSeconds
+		}
+		cfg.Upstreams[i].OAuth.CredentialsFile = expandPath(cfg.Upstreams[i].OAuth.CredentialsFile)
+	}
 }
 
 func validateConfig(cfg *Config) error {
-	mode := strings.TrimSpace(cfg.Upstream.Mode)
-	if mode != "api_key" && mode != "oauth" {
-		return errors.New("upstream.mode must be one of: api_key, oauth")
-	}
-	if strings.TrimSpace(cfg.Upstream.BaseURL) == "" {
-		return errors.New("upstream.base_url is required")
-	}
-	if mode == "api_key" && strings.TrimSpace(cfg.Upstream.APIKey) == "" {
-		return errors.New("upstream.api_key is required")
-	}
-	if mode == "oauth" && strings.TrimSpace(cfg.OAuth.CredentialsFile) == "" {
-		return errors.New("oauth.credentials_file is required")
+	if len(cfg.Upstreams) > 0 {
+		for i := range cfg.Upstreams {
+			if err := validateNamedUpstreamConfig(&cfg.Upstreams[i]); err != nil {
+				return fmt.Errorf("upstreams[%d]: %w", i, err)
+			}
+		}
+	} else {
+		mode := strings.TrimSpace(cfg.Upstream.Mode)
+		if mode != "api_key" && mode != "oauth" {
+			return errors.New("upstream.mode must be one of: api_key, oauth")
+		}
+		if strings.TrimSpace(cfg.Upstream.BaseURL) == "" {
+			return errors.New("upstream.base_url is required")
+		}
+		if mode == "api_key" && strings.TrimSpace(cfg.Upstream.APIKey) == "" {
+			return errors.New("upstream.api_key is required")
+		}
+		if mode == "oauth" && strings.TrimSpace(cfg.OAuth.CredentialsFile) == "" {
+			return errors.New("oauth.credentials_file is required")
+		}
 	}
 	if len(cfg.Auth.APIKeys) == 0 {
 		return errors.New("auth.api_keys must not be empty")
@@ -157,6 +194,32 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.OAuth.CallbackPort <= 0 || cfg.OAuth.CallbackPort > 65535 {
 		return errors.New("oauth.callback_port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func validateNamedUpstreamConfig(cfg *NamedUpstreamConfig) error {
+	mode := strings.TrimSpace(cfg.Mode)
+	if mode != "api_key" && mode != "oauth" && mode != "password_oauth" {
+		return errors.New("mode must be one of: api_key, oauth, password_oauth")
+	}
+	if strings.TrimSpace(cfg.Name) == "" {
+		return errors.New("name is required")
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return errors.New("base_url is required")
+	}
+	if mode == "api_key" && strings.TrimSpace(cfg.APIKey) == "" {
+		return errors.New("api_key is required")
+	}
+	if (mode == "oauth" || mode == "password_oauth") && strings.TrimSpace(cfg.OAuth.CredentialsFile) == "" {
+		return errors.New("oauth.credentials_file is required")
+	}
+	if mode == "password_oauth" && strings.TrimSpace(cfg.Email) == "" {
+		return errors.New("email is required")
+	}
+	if mode == "password_oauth" && strings.TrimSpace(cfg.Password) == "" {
+		return errors.New("password is required")
 	}
 	return nil
 }
@@ -194,4 +257,29 @@ func expandPath(path string) string {
 		}
 	}
 	return trimmed
+}
+
+func (c *Config) EffectiveUpstreams() []NamedUpstreamConfig {
+	if c == nil {
+		return nil
+	}
+	if len(c.Upstreams) > 0 {
+		out := make([]NamedUpstreamConfig, len(c.Upstreams))
+		copy(out, c.Upstreams)
+		return out
+	}
+	legacy := NamedUpstreamConfig{
+		Name:            "default",
+		Mode:            c.Upstream.Mode,
+		BaseURL:         c.Upstream.BaseURL,
+		APIKey:          c.Upstream.APIKey,
+		TimeoutSeconds:  c.Upstream.TimeoutSeconds,
+		DefaultModel:    "",
+		ModelMapping:    nil,
+		CooldownSeconds: 300,
+	}
+	if legacy.Mode == "oauth" {
+		legacy.OAuth.CredentialsFile = c.OAuth.CredentialsFile
+	}
+	return []NamedUpstreamConfig{legacy}
 }

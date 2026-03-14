@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +29,14 @@ type appContext struct {
 	stdout     io.Writer
 	configPath string
 }
+
+var accountsStatusProvider = loadAccountsStatus
+var accountsStatusStreamer = streamAccountsStatus
+var accountPoolFactory = newUpstreamAccountPool
+var accountStatusLoader = upstream.LoadAccountStatuses
+var accountStatusSaver = upstream.SaveAccountStatuses
+var accountStatusProber = probeMissingAccountStatuses
+var authLoginRunner = cli.AuthLogin
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
@@ -69,6 +78,7 @@ func newRootCommand(app *appContext) *cobra.Command {
 
 	root.AddCommand(
 		newCompletionCommand(root),
+		newAccountsCommand(app),
 		newInitCommand(app),
 		newServeCommand(app),
 		newStartCommand(app),
@@ -80,6 +90,250 @@ func newRootCommand(app *appContext) *cobra.Command {
 		newAuthCommand(app),
 	)
 	return root
+}
+
+func newAccountsCommand(app *appContext) *cobra.Command {
+	accounts := &cobra.Command{
+		Use:   "accounts",
+		Short: "Inspect upstream OpenAI accounts",
+	}
+	var jsonOutput bool
+	statusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show account quota and availability status",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfigFromFile(app.configPath)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			if jsonOutput {
+				statuses, err := accountsStatusProvider(cfg)
+				if err != nil {
+					return fmt.Errorf("init account pool: %w", err)
+				}
+				encoder := json.NewEncoder(app.stdout)
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(statuses)
+			}
+			return accountsStatusStreamer(cfg, app.stdout)
+		},
+	}
+	statusCmd.Flags().BoolVar(&jsonOutput, "json", false, "print account status as JSON")
+	accounts.AddCommand(statusCmd)
+	return accounts
+}
+
+func streamAccountsStatus(cfg *config.Config, w io.Writer) error {
+	pool, err := accountPoolFactory(cfg)
+	if err != nil {
+		return fmt.Errorf("init account pool: %w", err)
+	}
+	if pool == nil {
+		return nil
+	}
+
+	statusPath := upstream.AccountStatusPath(cfg.Runtime.Dir)
+	if persisted, err := accountStatusLoader(statusPath); err == nil {
+		pool.ApplyPersistedStatuses(persisted)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	statuses := pool.AccountsStatus()
+	for i, status := range statuses {
+		if !hasUsableAccountSnapshot(status) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = pool.ProbeAccount(ctx, status.Name)
+			cancel()
+			for _, updated := range pool.AccountsStatus() {
+				if updated.Name == status.Name {
+					statuses[i] = updated
+					break
+				}
+			}
+		}
+		printAccountStatus(w, statuses[i])
+	}
+	_ = accountStatusSaver(statusPath, statuses)
+	return nil
+}
+
+func printAccountStatus(w io.Writer, item upstream.AccountStatus) {
+	_, _ = fmt.Fprintf(w, "%s  %s  default=%s  mode=%s  priority=%d\n",
+		item.Name, item.Status, firstNonEmptyString(item.DefaultModel, "-"), item.Mode, item.Priority)
+	_, _ = fmt.Fprintf(w, "  5h  %s %5s  %s\n",
+		renderUsageBar(item.Codex5hUsedPercent), formatPercent(item.Codex5hUsedPercent), formatResetTime(item.Codex5hResetAt))
+	_, _ = fmt.Fprintf(w, "  7d  %s %5s  %s\n",
+		renderUsageBar(item.Codex7dUsedPercent), formatPercent(item.Codex7dUsedPercent), formatResetTime(item.Codex7dResetAt))
+	if item.LastError != "" {
+		_, _ = fmt.Fprintf(w, "  last_error  %s\n", item.LastError)
+	}
+}
+
+func loadAccountsStatus(cfg *config.Config) ([]upstream.AccountStatus, error) {
+	pool, err := accountPoolFactory(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if pool == nil {
+		return nil, nil
+	}
+
+	statusPath := upstream.AccountStatusPath(cfg.Runtime.Dir)
+	if persisted, err := accountStatusLoader(statusPath); err == nil {
+		pool.ApplyPersistedStatuses(persisted)
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	statuses := pool.AccountsStatus()
+	if hasMissingAccountSnapshots(statuses) {
+		_ = accountStatusProber(pool, statuses)
+		statuses = pool.AccountsStatus()
+	}
+	_ = accountStatusSaver(statusPath, statuses)
+	return statuses, nil
+}
+
+func setAccountsStatusProviderForTest(provider func(*config.Config) ([]upstream.AccountStatus, error)) func() {
+	previous := accountsStatusProvider
+	accountsStatusProvider = provider
+	return func() {
+		accountsStatusProvider = previous
+	}
+}
+
+func setAccountsStatusStreamerForTest(streamer func(*config.Config, io.Writer) error) func() {
+	previous := accountsStatusStreamer
+	accountsStatusStreamer = streamer
+	return func() {
+		accountsStatusStreamer = previous
+	}
+}
+
+func setAccountPoolFactoryForTest(factory func(*config.Config) (*upstream.OpenAIAccountPool, error)) func() {
+	previous := accountPoolFactory
+	accountPoolFactory = factory
+	return func() {
+		accountPoolFactory = previous
+	}
+}
+
+func setAccountStatusLoaderForTest(loader func(string) ([]upstream.AccountStatus, error)) func() {
+	previous := accountStatusLoader
+	accountStatusLoader = loader
+	return func() {
+		accountStatusLoader = previous
+	}
+}
+
+func setAccountStatusProberForTest(prober func(*upstream.OpenAIAccountPool, []upstream.AccountStatus) error) func() {
+	previous := accountStatusProber
+	accountStatusProber = prober
+	return func() {
+		accountStatusProber = previous
+	}
+}
+
+func setAuthLoginRunnerForTest(runner func(context.Context, *config.Config, io.Reader, io.Writer, string) error) func() {
+	previous := authLoginRunner
+	authLoginRunner = runner
+	return func() {
+		authLoginRunner = previous
+	}
+}
+
+func probeMissingAccountStatuses(pool *upstream.OpenAIAccountPool, statuses []upstream.AccountStatus) error {
+	if pool == nil {
+		return nil
+	}
+	var missing []string
+	for _, status := range statuses {
+		if !hasUsableAccountSnapshot(status) {
+			missing = append(missing, status.Name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return pool.ProbeAccounts(ctx, missing)
+}
+
+func hasMissingAccountSnapshots(statuses []upstream.AccountStatus) bool {
+	for _, status := range statuses {
+		if !hasUsableAccountSnapshot(status) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUsableAccountSnapshot(status upstream.AccountStatus) bool {
+	return status.Codex5hUsedPercent != nil || status.Codex5hResetAt != nil ||
+		status.Codex7dUsedPercent != nil || status.Codex7dResetAt != nil
+}
+
+func renderUsageBar(percent *float64) string {
+	const width = 20
+	if percent == nil {
+		return strings.Repeat("░", width)
+	}
+	value := *percent
+	if value < 0 {
+		value = 0
+	}
+	if value > 100 {
+		value = 100
+	}
+	filled := int((value / 100.0) * width)
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+func formatPercent(percent *float64) string {
+	if percent == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", *percent)
+}
+
+func formatResetTime(resetAt *time.Time) string {
+	if resetAt == nil {
+		return "reset -"
+	}
+	delta := time.Until(resetAt.UTC())
+	if delta <= 0 {
+		return "reset now"
+	}
+	return "reset in " + humanizeDuration(delta)
+}
+
+func humanizeDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "<1m"
+	}
+	totalMinutes := int(d.Round(time.Minute).Minutes())
+	days := totalMinutes / (24 * 60)
+	hours := (totalMinutes % (24 * 60)) / 60
+	minutes := totalMinutes % 60
+	switch {
+	case days > 0:
+		if hours > 0 {
+			return fmt.Sprintf("%dd%dh", days, hours)
+		}
+		return fmt.Sprintf("%dd", days)
+	case hours > 0:
+		if minutes > 0 {
+			return fmt.Sprintf("%dh%dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh", hours)
+	default:
+		return fmt.Sprintf("%dm", minutes)
+	}
 }
 
 func newCompletionCommand(root *cobra.Command) *cobra.Command {
@@ -220,19 +474,24 @@ func newAuthCommand(app *appContext) *cobra.Command {
 		Short: "Manage OpenAI OAuth credentials",
 	}
 	auth.AddCommand(
-		&cobra.Command{
-			Use:   "login",
-			Short: "Run OAuth login flow",
-			RunE: func(cmd *cobra.Command, args []string) error {
-				cfg, err := loadConfigFromFile(app.configPath)
-				if err != nil {
-					return fmt.Errorf("load config: %w", err)
-				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
-				return cli.AuthLogin(ctx, cfg, app.stdout)
-			},
-		},
+		func() *cobra.Command {
+			var account string
+			cmd := &cobra.Command{
+				Use:   "login",
+				Short: "Run OAuth login flow",
+				RunE: func(cmd *cobra.Command, args []string) error {
+					cfg, err := loadConfigFromFile(app.configPath)
+					if err != nil {
+						return fmt.Errorf("load config: %w", err)
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
+					return authLoginRunner(ctx, cfg, app.stdin, app.stdout, account)
+				},
+			}
+			cmd.Flags().StringVar(&account, "account", "", "oauth account name")
+			return cmd
+		}(),
 		&cobra.Command{
 			Use:   "status",
 			Short: "Show OAuth credential status",
@@ -274,9 +533,24 @@ func serve(configPath string, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("init upstream client: %w", err)
 	}
+	upstreamPool, err := newUpstreamAccountPool(cfg)
+	if err != nil {
+		return fmt.Errorf("init upstream account pool: %w", err)
+	}
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	handlerOptions := []handler.Option{
 		handler.WithLogger(log.Default()),
 		handler.WithDebugDumpHTTP(cfg.Logging.DebugDumpHTTP),
+		handler.WithInstanceLabel(addr),
+	}
+	if upstreamPool != nil {
+		handlerOptions = append(
+			handlerOptions,
+			handler.WithAccountPool(upstreamPool),
+			handler.WithAccountStatusPersister(func(statuses []upstream.AccountStatus) error {
+				return upstream.SaveAccountStatuses(upstream.AccountStatusPath(cfg.Runtime.Dir), statuses)
+			}),
+		)
 	}
 	if cfg.Upstream.Mode == "oauth" {
 		handlerOptions = append(handlerOptions, handler.WithCredentialsLoader(oauth.NewStore(cfg.OAuth.CredentialsFile)))
@@ -284,7 +558,6 @@ func serve(configPath string, cfg *config.Config) error {
 	openAIHandler := handler.NewOpenAIHandler(upstreamClient, handlerOptions...)
 	router := httpserver.NewRouter(cfg, openAIHandler)
 
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           router,
@@ -340,6 +613,12 @@ func configureLogging(cfg *config.Config) (*os.File, error) {
 }
 
 func newUpstreamClient(cfg *config.Config) (*upstream.Client, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	if len(cfg.EffectiveUpstreams()) > 0 {
+		return nil, nil
+	}
 	timeout := time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	switch cfg.Upstream.Mode {
 	case "oauth":
@@ -353,6 +632,52 @@ func newUpstreamClient(cfg *config.Config) (*upstream.Client, error) {
 	default:
 		return upstream.NewClient(cfg.Upstream.BaseURL, cfg.Upstream.APIKey, timeout), nil
 	}
+}
+
+func newUpstreamAccountPool(cfg *config.Config) (*upstream.OpenAIAccountPool, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	effective := cfg.EffectiveUpstreams()
+	if len(effective) == 0 {
+		return nil, nil
+	}
+	tokenSources := make(map[string]upstream.AccessTokenSource)
+	for _, item := range effective {
+		if item.Mode != upstream.ModeOAuth && item.Mode != "password_oauth" {
+			continue
+		}
+		credPath := item.OAuth.CredentialsFile
+		if strings.TrimSpace(credPath) == "" {
+			credPath = cfg.OAuth.CredentialsFile
+		}
+		store := oauth.NewStore(credPath)
+		flow := oauth.NewFlow(oauth.Config{
+			RedirectURI: buildRedirectURI(cfg),
+			ClientID:    oauth.DefaultClientID,
+		}, nil)
+		if item.Mode == "password_oauth" {
+			tokenSources[item.Name] = oauth.NewPasswordTokenSource(
+				store,
+				flow,
+				&oauth.HTTPPasswordLoginExecutor{},
+				oauth.PasswordLoginRequest{
+					Email:       item.Email,
+					Password:    item.Password,
+					ClientID:    oauth.DefaultClientID,
+					RedirectURI: buildRedirectURI(cfg),
+				},
+				30*time.Second,
+			)
+			continue
+		}
+		tokenSources[item.Name] = oauth.NewTokenSource(store, flow, 30*time.Second)
+	}
+	timeout := time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	return upstream.NewOpenAIAccountPool(effective, tokenSources, timeout), nil
 }
 
 func buildRedirectURI(cfg *config.Config) string {
@@ -395,4 +720,13 @@ func expandCLIPath(path string) string {
 		}
 	}
 	return trimmed
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

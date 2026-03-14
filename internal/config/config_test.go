@@ -186,3 +186,94 @@ auth:
 		t.Fatalf("unexpected runtime dir without HOME: %q (original HOME=%q)", cfg.Runtime.Dir, originalHome)
 	}
 }
+
+func TestLoadConfig_LoadsMultipleUpstreams(t *testing.T) {
+	cfg, err := LoadConfig(strings.NewReader(`
+auth:
+  api_keys:
+    - local-key
+upstreams:
+  - name: primary
+    mode: api_key
+    base_url: https://api.openai.com
+    api_key: sk-primary
+    priority: 10
+    default_model: gpt-4.1
+    model_mapping:
+      gpt-4.1: gpt-4.1-mini
+  - name: backup
+    mode: oauth
+    base_url: https://api.openai.com
+    priority: 20
+    default_model: gpt-4.1
+    oauth:
+      credentials_file: ./credentials/backup-oauth.json
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if len(cfg.Upstreams) != 2 {
+		t.Fatalf("unexpected upstream count: %d", len(cfg.Upstreams))
+	}
+	if cfg.Upstreams[0].Name != "primary" {
+		t.Fatalf("unexpected first upstream name: %q", cfg.Upstreams[0].Name)
+	}
+	if cfg.Upstreams[0].ModelMapping["gpt-4.1"] != "gpt-4.1-mini" {
+		t.Fatalf("unexpected first upstream model mapping: %#v", cfg.Upstreams[0].ModelMapping)
+	}
+	if cfg.Upstreams[1].OAuth.CredentialsFile != "./credentials/backup-oauth.json" {
+		t.Fatalf("unexpected oauth credentials path: %q", cfg.Upstreams[1].OAuth.CredentialsFile)
+	}
+}
+
+func TestLoadConfig_LoadsPasswordOAuthMode(t *testing.T) {
+	cfg, err := LoadConfig(strings.NewReader(`
+auth:
+  api_keys:
+    - local-key
+upstreams:
+  - name: primary
+    mode: password_oauth
+    base_url: https://api.openai.com
+    email: user@example.com
+    password: secret-password
+    priority: 10
+    default_model: gpt-5.1-codex-mini
+    oauth:
+      credentials_file: ./credentials/password-oauth.json
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.Upstreams[0].Mode != "password_oauth" {
+		t.Fatalf("unexpected mode: %q", cfg.Upstreams[0].Mode)
+	}
+	if cfg.Upstreams[0].Email != "user@example.com" {
+		t.Fatalf("unexpected email: %q", cfg.Upstreams[0].Email)
+	}
+	if cfg.Upstreams[0].Password != "secret-password" {
+		t.Fatalf("unexpected password: %q", cfg.Upstreams[0].Password)
+	}
+}
+
+func TestLoadConfig_LegacyUpstreamStillWorks(t *testing.T) {
+	cfg, err := LoadConfig(strings.NewReader(`
+auth:
+  api_keys:
+    - local-key
+upstream:
+  mode: api_key
+  base_url: https://api.openai.com
+  api_key: sk-upstream
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if len(cfg.Upstreams) != 0 {
+		t.Fatalf("expected no explicit upstreams for legacy config, got %#v", cfg.Upstreams)
+	}
+	effective := cfg.EffectiveUpstreams()
+	if len(effective) != 1 || effective[0].Name != "default" {
+		t.Fatalf("unexpected effective upstreams: %#v", effective)
+	}
+}

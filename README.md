@@ -30,6 +30,7 @@ Codex Gateway 适合以下场景：
 - 轻量部署：单二进制运行，无数据库、无 Redis、无额外服务依赖
 - OpenAI 兼容接口：暴露常见模型查询与生成接口，便于对接现有客户端
 - 双认证模式：支持上游 API Key，也支持 OAuth 登录与刷新
+- OpenAI 多账号池：支持按模型选账号，并在额度不足或限流时自动切换
 - 本地运行控制：提供 `start`、`stop`、`restart`、`status`、`logs`、`doctor` 等命令
 - 可调试日志：支持请求摘要日志，必要时可打开 HTTP 调试转储
 
@@ -39,7 +40,7 @@ Codex Gateway 适合以下场景：
 
 - 多用户与多租户
 - 订阅、配额、计费
-- 多账号调度与故障切换
+- 多平台账号调度与复杂故障切换
 - Web 管理后台
 - 完整的 OAuth 管理平台能力
 
@@ -168,6 +169,9 @@ curl http://127.0.0.1:9867/v1/chat/completions \
   - 允许访问本地网关的 API Key 列表
 - `upstream`
   - 上游模式、基础地址、API Key 与请求超时
+- `upstreams`
+  - OpenAI 多账号池配置；非空时优先于旧 `upstream`
+  - 每个账号可配置 `priority`、`default_model`、`model_mapping`、`cooldown_seconds`
 - `oauth`
   - 本地 OAuth 回调地址、凭证文件位置与浏览器自动打开选项
 - `runtime`
@@ -183,6 +187,37 @@ curl http://127.0.0.1:9867/v1/chat/completions \
 - `~/.codex-gateway/codex-gateway.json`
 - `~/.codex-gateway/codex-gateway.log`
 
+多账号示例：
+
+```yaml
+upstreams:
+  - name: primary
+    mode: api_key
+    base_url: https://api.openai.com
+    api_key: sk-primary
+    priority: 10
+    cooldown_seconds: 300
+    default_model: gpt-4.1
+    model_mapping:
+      gpt-4.1: gpt-4.1
+
+  - name: backup
+    mode: api_key
+    base_url: https://api.openai.com
+    api_key: sk-backup
+    priority: 20
+    cooldown_seconds: 300
+    default_model: gpt-4.1-mini
+```
+
+行为说明：
+
+- `upstreams` 非空时，网关会从账号池中选 OpenAI 账号转发请求
+- 账号可通过 `model_mapping` 显式声明支持模型
+- 没有 `model_mapping` 的账号会被视为通用账号
+- 请求未携带 `model` 时，网关会使用所选账号的 `default_model`
+- 当上游返回 `insufficient_quota`、`rate_limit`、`billing_hard_limit` 等额度相关错误时，网关会将当前账号短暂冷却并切换到下一个可用账号
+
 ## CLI 命令
 
 常用命令如下：
@@ -196,6 +231,7 @@ codexgateway stop
 codexgateway restart
 codexgateway doctor
 codexgateway status
+codexgateway accounts status
 codexgateway logs -n 100
 ```
 
@@ -241,6 +277,14 @@ codexgateway auth login
 ```bash
 codexgateway auth status
 ```
+
+查看多账号池状态：
+
+```bash
+codexgateway accounts status
+```
+
+该命令返回每个账号的可用性与额度摘要，例如当前是否处于 cooldown，以及最近一次记录到的 5 小时 / 7 天 usage snapshot。
 
 手动刷新凭证：
 
